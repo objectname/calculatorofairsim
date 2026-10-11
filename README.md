@@ -1,6 +1,6 @@
 # Calculator of AirSim
 
-A lightweight browser-based tool for comparing two route datasets and finding great-circle intercept points between flight segments.
+A slop coded lightweight browser-based tool for comparing two route datasets and finding great-circle intercept points between flight segments.
 
 This project is designed to run as a static GitHub Pages site, so it can be hosted directly from the repository without a backend.
 
