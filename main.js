@@ -1,25 +1,380 @@
 "use strict";
-const R=6371, COLORS=["#38bdf8","#f97316","#a78bfa","#22c55e","#f43f5e","#facc15"];
-const airports=new Map(); let loaded=false,lastRows=[];
-const $=id=>document.getElementById(id), status=$("status-message"), columns=$("route-columns"), results=$("results-body"), exportsBox=$("exports");
-const map=L.map("map",{worldCopyJump:true}).setView([20,0],2);
-const sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:19,attribution:"Tiles © Esri"}).addTo(map);
-const osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"});
-L.control.layers({Satellite:sat,OpenStreetMap:osm}).addTo(map); const layers=L.layerGroup().addTo(map);
-function csv(line){let a=[],v="",q=false;for(let i=0;i<line.length;i++){let c=line[i],n=line[i+1];if(c==='"'){if(q&&n==='"'){v+='"';i++}else q=!q}else if(c===","&&!q){a.push(v.trim());v=""}else v+=c}a.push(v.trim());return a}
-function indexOf(h,...names){let x=h.map(v=>String(v).toLowerCase().replace(/[^a-z0-9]/g,""));return x.findIndex(v=>names.includes(v))}
-async function load(){try{let r=await fetch("./airports.csv",{cache:"no-store"});if(!r.ok)throw Error(`HTTP ${r.status}`);let lines=(await r.text()).split(/\r?\n/).filter(Boolean),h=csv(lines[0]);let id=indexOf(h,"ident"),ia=indexOf(h,"iata","iatacode"),ic=indexOf(h,"icao","icaocode","gpscode"),la=indexOf(h,"latitude","latitudedeg","lat"),lo=indexOf(h,"longitude","longitudedeg","lon","lng");if(la<0||lo<0)throw Error("latitude/longitude columns missing");for(let line of lines.slice(1)){let row=csv(line),lat=Number(row[la]),lon=Number(row[lo]);if(!Number.isFinite(lat)||!Number.isFinite(lon))continue;for(let i of [id,ia,ic]){let k=i>=0?String(row[i]||"").trim().toUpperCase():"";if(k)airports.set(k,{lat,lon})}}loaded=true;status.textContent=`airports.csv loaded (${airports.size.toLocaleString()} codes)`}catch(e){status.textContent=`Could not load airports.csv: ${e.message}`;console.error(e)}}
-const rad=x=>x*Math.PI/180, deg=x=>x*180/Math.PI, lon=x=>((x+540)%360)-180, clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-function distance(a,b){let p=rad(b.lat-a.lat),q=rad(b.lon-a.lon),x=Math.sin(p/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(q/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x))}
-function vec(p){let a=rad(p.lat),b=rad(p.lon);return{x:Math.cos(a)*Math.cos(b),y:Math.cos(a)*Math.sin(b),z:Math.sin(a)}} function cross(a,b){return{x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x}} function mag(a){return Math.hypot(a.x,a.y,a.z)} function unit(a){let n=mag(a);return{x:a.x/n,y:a.y/n,z:a.z/n}} function point(v){return{lat:deg(Math.atan2(v.z,Math.hypot(v.x,v.y))),lon:lon(deg(Math.atan2(v.y,v.x)))}}
-function onArc(p,r){return Math.abs(distance(r.start,p)+distance(p,r.end)-distance(r.start,r.end))<=3}
-function hit(a,b){let n=cross(cross(vec(a.start),vec(a.end)),cross(vec(b.start),vec(b.end)));if(mag(n)<1e-12)return null;let p=point(unit(n)),q={lat:-p.lat,lon:lon(p.lon+180)};return onArc(p,a)&&onArc(p,b)?p:onArc(q,a)&&onArc(q,b)?q:null}
-function samples(r,n=120){let a=vec(r.start),b=vec(r.end),d=Math.acos(clamp(a.x*b.x+a.y*b.y+a.z*b.z,-1,1)),s=Math.sin(d),out=[];if(d<1e-9)return[r.start];for(let i=0;i<=n;i++){let t=i/n,A=Math.sin((1-t)*d)/s,B=Math.sin(t*d)/s;out.push(point(unit({x:A*a.x+B*b.x,y:A*a.y+B*b.y,z:A*a.z+B*b.z})))}return out}
-function parseColumn(text,letter){let lines=String(text).split(/\r?\n/).map(x=>x.trim()).filter(Boolean),name=`Airline ${letter}`;if(lines[0]?.startsWith("#")){name=lines.shift().slice(1).trim()||name}let routes=[];for(let line of lines){let p=line.replace(/[–—/,\t]/g,"-").split("-").map(x=>x.trim().toUpperCase()).filter(Boolean);if(p.length<2)continue;let start=airports.get(p[0]),end=airports.get(p[1]);if(start&&end)routes.push({name:`${p[0]}-${p[1]}`,start,end})}return{name,routes}}
-function addColumn(value=""){let n=columns.children.length;if(n>=6)return;let l=String.fromCharCode(65+n),box=document.createElement("article");box.className="route-column";box.style.setProperty("--column-color",COLORS[n]);box.dataset.letter=l;box.innerHTML=`<div class="column-header"><strong>${l}: Airline routes</strong><button class="danger remove" type="button">Remove</button></div><textarea placeholder="# Airline name&#10;HKG-JFK&#10;DXB-LHR"></textarea>`;box.querySelector("textarea").value=value;box.querySelector(".remove").onclick=()=>{box.remove();relabel()};columns.appendChild(box)}
-function relabel(){[...columns.children].forEach((box,i)=>{let l=String.fromCharCode(65+i);box.dataset.letter=l;box.style.setProperty("--column-color",COLORS[i]);box.querySelector("strong").textContent=`${l}: Airline routes`})}
-function pairs(n,mode,pattern){let out=[];if(mode==="all"){for(let a=0;a<n;a++)for(let b=a+1;b<n;b++)out.push([a,b])}else if(mode.startsWith("pairwise")){for(let i=0;i+1<n;i+=2)out.push([i,i+1]);if(mode==="pairwise-wrap"&&n>2)out.push([n-1,0])}else{for(let token of pattern.split(/[,\s]+/)){let m=token.toUpperCase().match(/^([A-F])-([A-F])$/);if(m){let a=m[1].charCodeAt(0)-65,b=m[2].charCodeAt(0)-65;if(a<n&&b<n&&a!==b&&!out.some(x=>x[0]===a&&x[1]===b))out.push([a,b])}}}return out}
-function run(){if(!loaded)return alert("airports.csv is still loading.");let sets=[...columns.children].map((x,i)=>parseColumn(x.querySelector("textarea").value,String.fromCharCode(65+i))), selected=pairs(sets.length,$("compare-mode").value,$("pair-patterns").value),min=clamp(+$("min-intercepts").value||1,1,10),max=clamp(+$("max-intercepts").value||10,1,10);if(min>max)[min,max]=[max,min];layers.clearLayers();let groups=[];for(let [ai,bi] of selected){let a=sets[ai],b=sets[bi],hits=[];for(let ra of a.routes)for(let rb of b.routes){let p=hit(ra,rb);if(p)hits.push({airlineA:a.name,airlineB:b.name,routeA:ra.name,routeB:rb.name,aDistance:distance(ra.start,ra.end),bDistance:distance(rb.start,rb.end),lat:p.lat,lon:p.lon,pairCount:0})}if(hits.length>=min&&hits.length<=max){hits.forEach(x=>x.pairCount=hits.length);groups.push({ai,bi,hits})}}lastRows=groups.flatMap(x=>x.hits);for(let g of groups){for(let r of sets[g.ai].routes)L.polyline(samples(r).map(p=>[p.lat,p.lon]),{color:COLORS[g.ai],weight:3}).addTo(layers);for(let r of sets[g.bi].routes)L.polyline(samples(r).map(p=>[p.lat,p.lon]),{color:COLORS[g.bi],weight:3}).addTo(layers);for(let r of g.hits)L.circleMarker([r.lat,r.lon],{radius:6,color:"#facc15",fillOpacity:1}).addTo(layers).bindPopup(`<b>${r.airlineA} × ${r.airlineB}</b><br>${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}<br>Pair count: ${r.pairCount}`)}show()}
-function show(){if(!lastRows.length){results.innerHTML='<tr><td colspan="8">No airline pairs matched the selected patterns and intercept-count filter.</td></tr>';exportsBox.classList.add("hidden");return}results.innerHTML=lastRows.map(r=>`<tr><td>${r.airlineA}</td><td>${r.airlineB}</td><td>${r.routeA} × ${r.routeB}</td><td>${r.pairCount}</td><td>${r.aDistance.toFixed(1)} km</td><td>${r.bDistance.toFixed(1)} km</td><td>${r.lat.toFixed(6)}°</td><td>${r.lon.toFixed(6)}°</td></tr>`).join("");exportsBox.classList.remove("hidden")}
-function data(){return lastRows.map(r=>({"Airline A":r.airlineA,"Airline B":r.airlineB,"Route A":r.routeA,"Route B":r.routeB,"Pair intercept count":r.pairCount,"Route A distance km":+r.aDistance.toFixed(1),"Route B distance km":+r.bDistance.toFixed(1),Latitude:+r.lat.toFixed(6),Longitude:+r.lon.toFixed(6)}))}function save(name,text,type){let u=URL.createObjectURL(new Blob([text],{type})),a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),500)}
-$("add-column").onclick=()=>addColumn();$("run-analysis").onclick=run;$("compare-mode").onchange=e=>$("pair-pattern-wrap").style.display=e.target.value==="selected"?"flex":"none";exportsBox.onclick=e=>{let t=e.target.dataset.export;if(!t||!lastRows.length)return;let rows=data();if(t==="txt")save("result.txt",rows.map(r=>Object.entries(r).map(([k,v])=>`${k}: ${v}`).join("\n")).join("\n\n"),"text/plain;charset=utf-8");else if(t==="csv"){let h=Object.keys(rows[0]),q=x=>`"${String(x).replaceAll('"','""')}"`;save("result.csv",[h.join(","),...rows.map(r=>h.map(k=>q(r[k])).join(","))].join("\n"),"text/csv;charset=utf-8")}else if(t==="xlsx"&&window.XLSX){let w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.json_to_sheet(rows),"Intercepts");XLSX.writeFile(w,"result.xlsx")}};addColumn("# Airline A\nHKG-LHR");addColumn("# Airline B\nSIN-JFK");load();
+
+const EARTH_RADIUS_KM = 6371;
+const COLORS = ["#38bdf8", "#f97316", "#a78bfa", "#22c55e", "#f43f5e", "#facc15"];
+
+const airports = new Map();
+let databaseLoaded = false;
+let lastRows = [];
+
+const byId = (id) => document.getElementById(id);
+const status = byId("status-message");
+const columns = byId("route-columns");
+const resultsBody = byId("results-body");
+const exportButtons = byId("exports");
+
+const map = L.map("map", { worldCopyJump: true }).setView([20, 0], 2);
+const satelliteLayer = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Tiles © Esri" }
+).addTo(map);
+const openStreetMap = L.tileLayer(
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "© OpenStreetMap contributors" }
+);
+L.control.layers({ Satellite: satelliteLayer, OpenStreetMap: openStreetMap }).addTo(map);
+const routeLayer = L.layerGroup().addTo(map);
+
+function parseCsvLine(line) {
+  const values = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const next = line[index + 1];
+
+    if (character === '"') {
+      if (quoted && next === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === "," && !quoted) {
+      values.push(value.trim());
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  values.push(value.trim());
+  return values;
+}
+
+function findColumn(headers, ...names) {
+  const cleaned = headers.map((header) =>
+    String(header).toLowerCase().replace(/[^a-z0-9]/g, "")
+  );
+  return cleaned.findIndex((header) => names.includes(header));
+}
+
+async function loadAirportsCSV() {
+  try {
+    const response = await fetch("./airports.csv", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const lines = (await response.text())
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n/)
+      .filter((line) => line.trim());
+
+    const headers = parseCsvLine(lines[0]);
+    const identIndex = findColumn(headers, "ident");
+    const iataIndex = findColumn(headers, "iata", "iatacode");
+    const icaoIndex = findColumn(headers, "icao", "icaocode", "gpscode");
+    const latitudeIndex = findColumn(headers, "latitude", "latitudedeg", "lat");
+    const longitudeIndex = findColumn(headers, "longitude", "longitudedeg", "lon", "lng");
+
+    if (latitudeIndex < 0 || longitudeIndex < 0) {
+      throw new Error("latitude/longitude columns are missing");
+    }
+
+    for (const line of lines.slice(1)) {
+      const row = parseCsvLine(line);
+      const lat = Number(row[latitudeIndex]);
+      const lon = Number(row[longitudeIndex]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+      for (const index of [identIndex, iataIndex, icaoIndex]) {
+        const code = index >= 0 ? String(row[index] || "").trim().toUpperCase() : "";
+        if (code) airports.set(code, { lat, lon });
+      }
+    }
+
+    databaseLoaded = true;
+    status.textContent = `airports.csv loaded (${airports.size.toLocaleString()} codes)`;
+  } catch (error) {
+    console.error(error);
+    status.textContent = `Could not load airports.csv: ${error.message}`;
+  }
+}
+
+const radians = (value) => (value * Math.PI) / 180;
+const degrees = (value) => (value * 180) / Math.PI;
+const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+const normalizeLongitude = (longitude) => ((longitude + 540) % 360) - 180;
+
+function distance(a, b) {
+  const deltaLat = radians(b.lat - a.lat);
+  const deltaLon = radians(b.lon - a.lon);
+  const value =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(radians(a.lat)) * Math.cos(radians(b.lat)) * Math.sin(deltaLon / 2) ** 2;
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+function vector(point) {
+  const latitude = radians(point.lat);
+  const longitude = radians(point.lon);
+  return {
+    x: Math.cos(latitude) * Math.cos(longitude),
+    y: Math.cos(latitude) * Math.sin(longitude),
+    z: Math.sin(latitude)
+  };
+}
+
+function cross(a, b) {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x
+  };
+}
+
+function magnitude(value) {
+  return Math.hypot(value.x, value.y, value.z);
+}
+
+function normalized(value) {
+  const length = magnitude(value);
+  return { x: value.x / length, y: value.y / length, z: value.z / length };
+}
+
+function pointFromVector(value) {
+  return {
+    lat: degrees(Math.atan2(value.z, Math.hypot(value.x, value.y))),
+    lon: normalizeLongitude(degrees(Math.atan2(value.y, value.x)))
+  };
+}
+
+function sameAirport(a, b) {
+  return distance(a, b) <= 1;
+}
+
+function sharedEndpointIntersection(routeA, routeB) {
+  const endpointPairs = [
+    [routeA.start, routeB.start],
+    [routeA.start, routeB.end],
+    [routeA.end, routeB.start],
+    [routeA.end, routeB.end]
+  ];
+
+  for (const [first, second] of endpointPairs) {
+    if (sameAirport(first, second)) {
+      return { lat: first.lat, lon: first.lon, method: "shared-airport" };
+    }
+  }
+
+  return null;
+}
+
+function onRoute(point, route, toleranceKm = 4) {
+  return Math.abs(
+    distance(route.start, point) + distance(point, route.end) - distance(route.start, route.end)
+  ) <= toleranceKm;
+}
+
+function intersection(routeA, routeB) {
+  const shared = sharedEndpointIntersection(routeA, routeB);
+  if (shared) return shared;
+
+  const planeA = cross(vector(routeA.start), vector(routeA.end));
+  const planeB = cross(vector(routeB.start), vector(routeB.end));
+  const crossing = cross(planeA, planeB);
+
+  if (magnitude(crossing) < 1e-12) return null;
+
+  const first = pointFromVector(normalized(crossing));
+  const second = { lat: -first.lat, lon: normalizeLongitude(first.lon + 180) };
+
+  if (onRoute(first, routeA) && onRoute(first, routeB)) {
+    return { ...first, method: "great-circle" };
+  }
+
+  if (onRoute(second, routeA) && onRoute(second, routeB)) {
+    return { ...second, method: "great-circle" };
+  }
+
+  return null;
+}
+
+function greatCirclePoints(route, count = 120) {
+  const start = vector(route.start);
+  const end = vector(route.end);
+  const angle = Math.acos(clamp(start.x * end.x + start.y * end.y + start.z * end.z, -1, 1));
+  if (angle < 1e-9) return [route.start];
+
+  const sine = Math.sin(angle);
+  const points = [];
+
+  for (let index = 0; index <= count; index += 1) {
+    const fraction = index / count;
+    const startWeight = Math.sin((1 - fraction) * angle) / sine;
+    const endWeight = Math.sin(fraction * angle) / sine;
+    points.push(pointFromVector(normalized({
+      x: startWeight * start.x + endWeight * end.x,
+      y: startWeight * start.y + endWeight * end.y,
+      z: startWeight * start.z + endWeight * end.z
+    })));
+  }
+
+  return points;
+}
+
+function parseColumn(text, letter) {
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let name = `Airline ${letter}`;
+
+  if (lines[0] && lines[0].startsWith("#")) {
+    name = lines.shift().slice(1).trim() || name;
+  }
+
+  const routes = [];
+  const unknownCodes = new Set();
+
+  for (const line of lines) {
+    const codes = line.replace(/[–—/,\t]/g, "-").split("-")
+      .map((code) => code.trim().toUpperCase()).filter(Boolean);
+    if (codes.length < 2) continue;
+
+    const start = airports.get(codes[0]);
+    const end = airports.get(codes[1]);
+    if (!start || !end) {
+      if (!start) unknownCodes.add(codes[0]);
+      if (!end) unknownCodes.add(codes[1]);
+      continue;
+    }
+
+    routes.push({ name: `${codes[0]}-${codes[1]}`, start, end });
+  }
+
+  return { name, routes, unknownCodes: [...unknownCodes] };
+}
+
+function selectedPairs(count, mode, patterns) {
+  const pairs = [];
+  if (mode === "all") {
+    for (let a = 0; a < count; a += 1) {
+      for (let b = a + 1; b < count; b += 1) pairs.push([a, b]);
+    }
+  } else if (mode.startsWith("pairwise")) {
+    for (let index = 0; index + 1 < count; index += 2) pairs.push([index, index + 1]);
+    if (mode === "pairwise-wrap" && count > 2) pairs.push([count - 1, 0]);
+  } else {
+    for (const token of patterns.split(/[,\s]+/)) {
+      const match = token.toUpperCase().match(/^([A-F])-([A-F])$/);
+      if (!match) continue;
+      const a = match[1].charCodeAt(0) - 65;
+      const b = match[2].charCodeAt(0) - 65;
+      if (a < count && b < count && a !== b && !pairs.some((pair) => pair[0] === a && pair[1] === b)) {
+        pairs.push([a, b]);
+      }
+    }
+  }
+  return pairs;
+}
+
+function render() {
+  if (!lastRows.length) {
+    resultsBody.innerHTML = '<tr><td colspan="8">No airline pairs matched the selected patterns and intercept-count filter.</td></tr>';
+    exportButtons.classList.add("hidden");
+    return;
+  }
+
+  resultsBody.innerHTML = lastRows.map((row) => `
+    <tr><td>${row.airlineA}</td><td>${row.airlineB}</td>
+    <td>${row.routeA} × ${row.routeB}</td><td>${row.pairCount}</td>
+    <td>${row.aDistance.toFixed(1)} km</td><td>${row.bDistance.toFixed(1)} km</td>
+    <td>${row.lat.toFixed(6)}°</td><td>${row.lon.toFixed(6)}°</td></tr>
+  `).join("");
+  exportButtons.classList.remove("hidden");
+}
+
+function runAnalysis() {
+  if (!databaseLoaded) return alert("airports.csv is still loading.");
+
+  const sets = [...columns.children].map((box, index) =>
+    parseColumn(box.querySelector("textarea").value, String.fromCharCode(65 + index))
+  );
+
+  console.table(sets.map((set, index) => ({
+    column: String.fromCharCode(65 + index), airline: set.name,
+    validRoutes: set.routes.length, unknownCodes: set.unknownCodes.join(", ")
+  })));
+
+  let min = clamp(Number(byId("min-intercepts").value) || 1, 1, 10);
+  let max = clamp(Number(byId("max-intercepts").value) || 10, 1, 10);
+  if (min > max) [min, max] = [max, min];
+
+  routeLayer.clearLayers();
+  const passingGroups = [];
+
+  for (const [aIndex, bIndex] of selectedPairs(sets.length, byId("compare-mode").value, byId("pair-patterns").value)) {
+    const groupA = sets[aIndex];
+    const groupB = sets[bIndex];
+    const hits = [];
+
+    for (const routeA of groupA.routes) {
+      for (const routeB of groupB.routes) {
+        const point = intersection(routeA, routeB);
+        if (!point) continue;
+        hits.push({
+          airlineA: groupA.name, airlineB: groupB.name,
+          routeA: routeA.name, routeB: routeB.name,
+          aDistance: distance(routeA.start, routeA.end), bDistance: distance(routeB.start, routeB.end),
+          lat: point.lat, lon: point.lon, method: point.method, pairCount: 0
+        });
+      }
+    }
+
+    if (hits.length >= min && hits.length <= max) {
+      hits.forEach((hit) => { hit.pairCount = hits.length; });
+      passingGroups.push({ aIndex, bIndex, hits });
+    }
+  }
+
+  lastRows = passingGroups.flatMap((group) => group.hits);
+  console.log("Selected result rows:", lastRows.length);
+
+  for (const group of passingGroups) {
+    for (const route of sets[group.aIndex].routes) {
+      L.polyline(greatCirclePoints(route).map((point) => [point.lat, point.lon]), { color: COLORS[group.aIndex], weight: 3 }).addTo(routeLayer);
+    }
+    for (const route of sets[group.bIndex].routes) {
+      L.polyline(greatCirclePoints(route).map((point) => [point.lat, point.lon]), { color: COLORS[group.bIndex], weight: 3 }).addTo(routeLayer);
+    }
+    for (const row of group.hits) {
+      L.circleMarker([row.lat, row.lon], { radius: 6, color: "#facc15", fillOpacity: 1 }).addTo(routeLayer)
+        .bindPopup(`<b>${row.airlineA} × ${row.airlineB}</b><br>${row.lat.toFixed(5)}, ${row.lon.toFixed(5)}<br>Pair count: ${row.pairCount}<br>${row.method}`);
+    }
+  }
+
+  render();
+}
+
+function addColumn(text = "") {
+  if (columns.children.length >= 6) return;
+  const index = columns.children.length;
+  const letter = String.fromCharCode(65 + index);
+  const box = document.createElement("article");
+  box.className = "column";
+  box.style.setProperty("--color", COLORS[index]);
+  box.innerHTML = `<div class="column-head"><strong>${letter}: Airline routes</strong><button type="button" class="remove">Remove</button></div><textarea placeholder="# Airline name&#10;HKG-JFK&#10;DXB-LHR"></textarea>`;
+  box.querySelector("textarea").value = text;
+  box.querySelector(".remove").onclick = () => { box.remove(); };
+  columns.appendChild(box);
+}
+
+byId("add-column").onclick = () => addColumn();
+byId("run-analysis").onclick = runAnalysis;
+byId("compare-mode").onchange = (event) => {
+  byId("pair-pattern-wrap").style.display = event.target.value === "selected" ? "flex" : "none";
+};
+
+addColumn("# JAL\nHND LAX\nHND JFK\nHND LHR");
+addColumn("# CA\nLAX HND\nLAX JFK\nLAX LHR");
+loadAirportsCSV();
