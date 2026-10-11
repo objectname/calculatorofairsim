@@ -1,31 +1,6 @@
 "use strict";
 
-/*
-  Airline Route Intercept Analyzer
-
-  Required HTML element IDs:
-  - status-message
-  - route-columns
-  - results-body
-  - exports
-  - analysis-summary
-  - map
-  - add-column
-  - run-analysis
-  - compare-mode
-  - pair-pattern-wrap
-  - pair-patterns
-  - min-intercepts
-  - max-intercepts
-  - count-shared
-
-  Required local file:
-  - airports.csv
-*/
-
-const EARTH_RADIUS_KM = 6371;
-
-const COLUMN_COLORS = [
+const COLORS = [
   "#38bdf8",
   "#f97316",
   "#a78bfa",
@@ -38,29 +13,28 @@ const airports = new Map();
 
 let databaseLoaded = false;
 let lastRows = [];
+let lastAnalysis = null;
 
-const getById = (id) => document.getElementById(id);
+const byId = (id) => document.getElementById(id);
 
-const statusMessage = getById("status-message");
-const routeColumns = getById("route-columns");
-const resultsBody = getById("results-body");
-const exportButtons = getById("exports");
-const analysisSummary = getById("analysis-summary");
+const status = byId("status-message");
+const columns = byId("route-columns");
+const resultsBody = byId("results-body");
+const exportButtons = byId("exports");
 
 const map = L.map("map", {
   worldCopyJump: true
 }).setView([20, 0], 2);
 
 const satelliteLayer = L.tileLayer(
-  "https://server.arcgisonline.com/" +
-    "ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   {
     maxZoom: 19,
     attribution: "Tiles © Esri"
   }
 ).addTo(map);
 
-const openStreetMapLayer = L.tileLayer(
+const openStreetMap = L.tileLayer(
   "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
   {
     maxZoom: 19,
@@ -68,36 +42,32 @@ const openStreetMapLayer = L.tileLayer(
   }
 );
 
-L.control
-  .layers({
-    Satellite: satelliteLayer,
-    OpenStreetMap: openStreetMapLayer
-  })
-  .addTo(map);
+L.control.layers({
+  Satellite: satelliteLayer,
+  OpenStreetMap: openStreetMap
+}).addTo(map);
 
-const routeLayerGroup = L.layerGroup().addTo(map);
+const routeLayer = L.layerGroup().addTo(map);
 
-/* ----------------------------------------
-   CSV loading
----------------------------------------- */
+/* ------------------------- Airport CSV loading ------------------------- */
 
 function parseCsvLine(line) {
   const values = [];
   let value = "";
-  let insideQuotes = false;
+  let quoted = false;
 
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index];
-    const nextCharacter = line[index + 1];
+    const next = line[index + 1];
 
     if (character === "\"") {
-      if (insideQuotes && nextCharacter === "\"") {
+      if (quoted && next === "\"") {
         value += "\"";
         index += 1;
       } else {
-        insideQuotes = !insideQuotes;
+        quoted = !quoted;
       }
-    } else if (character === "," && !insideQuotes) {
+    } else if (character === "," && !quoted) {
       values.push(value.trim());
       value = "";
     } else {
@@ -106,37 +76,18 @@ function parseCsvLine(line) {
   }
 
   values.push(value.trim());
-
   return values;
 }
 
-function findHeaderIndex(headers, possibleNames) {
-  const normalizedHeaders = headers.map((header) =>
-    String(header)
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "")
+function findColumn(headers, ...names) {
+  const normalized = headers.map((header) =>
+    String(header).toLowerCase().replace(/[^a-z0-9]/g, "")
   );
 
-  for (const possibleName of possibleNames) {
-    const normalizedName = String(possibleName)
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-
-    const index = normalizedHeaders.indexOf(normalizedName);
-
-    if (index !== -1) {
-      return index;
-    }
-  }
-
-  return -1;
+  return normalized.findIndex((header) => names.includes(header));
 }
 
 async function loadAirportsCSV() {
-  statusMessage.textContent = "Loading airports.csv…";
-
   try {
     const response = await fetch("./airports.csv", {
       cache: "no-store"
@@ -146,400 +97,93 @@ async function loadAirportsCSV() {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const csvText = await response.text();
+    const text = await response.text();
 
-    const lines = csvText
+    const lines = text
       .replace(/^\uFEFF/, "")
       .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0);
+      .filter((line) => line.trim());
 
-    if (lines.length < 2) {
-      throw new Error("airports.csv contains no usable rows.");
+    if (!lines.length) {
+      throw new Error("airports.csv is empty");
     }
 
     const headers = parseCsvLine(lines[0]);
 
-    const identIndex = findHeaderIndex(headers, [
-      "ident"
-    ]);
+    const identIndex = findColumn(headers, "ident");
+    const iataIndex = findColumn(headers, "iata", "iatacode");
+    const icaoIndex = findColumn(headers, "icao", "icaocode", "gpscode");
 
-    const iataIndex = findHeaderIndex(headers, [
-      "iata",
-      "iata_code",
-      "iata code"
-    ]);
-
-    const icaoIndex = findHeaderIndex(headers, [
-      "icao",
-      "icao_code",
-      "icao code",
-      "gps_code",
-      "gps code"
-    ]);
-
-    const latitudeIndex = findHeaderIndex(headers, [
+    const latitudeIndex = findColumn(
+      headers,
       "latitude",
+      "latitudedeg",
       "latitude_deg",
-      "latitude deg",
       "lat"
-    ]);
+    );
 
-    const longitudeIndex = findHeaderIndex(headers, [
+    const longitudeIndex = findColumn(
+      headers,
       "longitude",
+      "longitudedeg",
       "longitude_deg",
-      "longitude deg",
       "lon",
       "lng"
-    ]);
+    );
 
-    if (latitudeIndex === -1 || longitudeIndex === -1) {
-      throw new Error(
-        "CSV must include latitude and longitude columns."
-      );
+    if (latitudeIndex < 0 || longitudeIndex < 0) {
+      throw new Error("latitude/longitude columns are missing");
     }
 
-    for (let rowNumber = 1; rowNumber < lines.length; rowNumber += 1) {
-      const row = parseCsvLine(lines[rowNumber]);
+    for (const line of lines.slice(1)) {
+      const row = parseCsvLine(line);
 
-      const latitude = Number(row[latitudeIndex]);
-      const longitude = Number(row[longitudeIndex]);
+      const lat = Number(row[latitudeIndex]);
+      const lon = Number(row[longitudeIndex]);
 
-      if (
-        !Number.isFinite(latitude) ||
-        !Number.isFinite(longitude) ||
-        latitude < -90 ||
-        latitude > 90 ||
-        longitude < -180 ||
-        longitude > 180
-      ) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
         continue;
       }
 
-      const airportPoint = {
-        lat: latitude,
-        lon: longitude
-      };
+      for (const index of [identIndex, iataIndex, icaoIndex]) {
+        if (index < 0) {
+          continue;
+        }
 
-      const airportCodes = [
-        identIndex >= 0
-          ? String(row[identIndex] || "").trim().toUpperCase()
-          : "",
-        iataIndex >= 0
-          ? String(row[iataIndex] || "").trim().toUpperCase()
-          : "",
-        icaoIndex >= 0
-          ? String(row[icaoIndex] || "").trim().toUpperCase()
-          : ""
-      ];
+        const code = String(row[index] || "")
+          .trim()
+          .toUpperCase();
 
-      for (const code of airportCodes) {
         if (code) {
-          airports.set(code, airportPoint);
+          airports.set(code, { lat, lon });
         }
       }
     }
 
     databaseLoaded = true;
 
-    statusMessage.textContent =
+    status.textContent =
       `airports.csv loaded (${airports.size.toLocaleString()} codes)`;
   } catch (error) {
-    console.error("Failed to load airports.csv:", error);
+    console.error(error);
 
-    statusMessage.textContent =
+    status.textContent =
       `Could not load airports.csv: ${error.message}`;
   }
 }
 
-/* ----------------------------------------
-   Geographic utilities
----------------------------------------- */
+/* --------------------------- Route input parsing ----------------------- */
 
-function toRadians(degrees) {
-  return (degrees * Math.PI) / 180;
-}
-
-function toDegrees(radians) {
-  return (radians * 180) / Math.PI;
-}
-
-function clamp(value, minimum, maximum) {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
-function normalizeLongitude(longitude) {
-  return ((longitude + 540) % 360) - 180;
-}
-
-function calculateDistanceKm(pointA, pointB) {
-  const deltaLatitude = toRadians(pointB.lat - pointA.lat);
-  const deltaLongitude = toRadians(pointB.lon - pointA.lon);
-
-  const haversine =
-    Math.sin(deltaLatitude / 2) ** 2 +
-    Math.cos(toRadians(pointA.lat)) *
-      Math.cos(toRadians(pointB.lat)) *
-      Math.sin(deltaLongitude / 2) ** 2;
-
-  return (
-    EARTH_RADIUS_KM *
-    2 *
-    Math.atan2(
-      Math.sqrt(haversine),
-      Math.sqrt(1 - haversine)
-    )
-  );
-}
-
-function pointToVector(point) {
-  const latitude = toRadians(point.lat);
-  const longitude = toRadians(point.lon);
-
-  return {
-    x: Math.cos(latitude) * Math.cos(longitude),
-    y: Math.cos(latitude) * Math.sin(longitude),
-    z: Math.sin(latitude)
-  };
-}
-
-function vectorCross(vectorA, vectorB) {
-  return {
-    x: vectorA.y * vectorB.z - vectorA.z * vectorB.y,
-    y: vectorA.z * vectorB.x - vectorA.x * vectorB.z,
-    z: vectorA.x * vectorB.y - vectorA.y * vectorB.x
-  };
-}
-
-function vectorMagnitude(vector) {
-  return Math.hypot(vector.x, vector.y, vector.z);
-}
-
-function normalizeVector(vector) {
-  const length = vectorMagnitude(vector);
-
-  return {
-    x: vector.x / length,
-    y: vector.y / length,
-    z: vector.z / length
-  };
-}
-
-function vectorToPoint(vector) {
-  return {
-    lat: toDegrees(
-      Math.atan2(
-        vector.z,
-        Math.hypot(vector.x, vector.y)
-      )
-    ),
-    lon: normalizeLongitude(
-      toDegrees(Math.atan2(vector.y, vector.x))
-    )
-  };
-}
-
-function sameAirport(pointA, pointB) {
-  return calculateDistanceKm(pointA, pointB) <= 1;
-}
-
-function routeDistanceKm(route) {
-  return calculateDistanceKm(route.start, route.end);
-}
-
-/* ----------------------------------------
-   Per-route-pair intersection logic
----------------------------------------- */
-
-function sharedEndpointIntersections(routeA, routeB) {
-  const endpointPairs = [
-    [routeA.start, routeB.start],
-    [routeA.start, routeB.end],
-    [routeA.end, routeB.start],
-    [routeA.end, routeB.end]
-  ];
-
-  const output = [];
-
-  for (const [first, second] of endpointPairs) {
-    if (!sameAirport(first, second)) {
-      continue;
-    }
-
-    const existsAlready = output.some((point) =>
-      sameAirport(point, first)
-    );
-
-    if (!existsAlready) {
-      output.push({
-        lat: first.lat,
-        lon: first.lon,
-        type: "shared-airport"
-      });
-    }
-  }
-
-  return output;
-}
-
-function pointIsOnRouteArc(point, route, toleranceKm = 4) {
-  const routeDistance = routeDistanceKm(route);
-
-  const startDistance = calculateDistanceKm(
-    route.start,
-    point
-  );
-
-  const endDistance = calculateDistanceKm(
-    point,
-    route.end
-  );
-
-  return Math.abs(
-    startDistance + endDistance - routeDistance
-  ) <= toleranceKm;
-}
-
-function routePairIntersections(
-  routeA,
-  routeB,
-  includeSharedAirports
-) {
-  const sharedAirports = sharedEndpointIntersections(
-    routeA,
-    routeB
-  );
-
-  if (sharedAirports.length > 0) {
-    return includeSharedAirports
-      ? sharedAirports
-      : [];
-  }
-
-  const routeAPlaneNormal = vectorCross(
-    pointToVector(routeA.start),
-    pointToVector(routeA.end)
-  );
-
-  const routeBPlaneNormal = vectorCross(
-    pointToVector(routeB.start),
-    pointToVector(routeB.end)
-  );
-
-  const crossingVector = vectorCross(
-    routeAPlaneNormal,
-    routeBPlaneNormal
-  );
-
-  if (vectorMagnitude(crossingVector) < 1e-12) {
-    return [];
-  }
-
-  const firstCandidate = vectorToPoint(
-    normalizeVector(crossingVector)
-  );
-
-  const secondCandidate = {
-    lat: -firstCandidate.lat,
-    lon: normalizeLongitude(firstCandidate.lon + 180)
-  };
-
-  if (
-    pointIsOnRouteArc(firstCandidate, routeA) &&
-    pointIsOnRouteArc(firstCandidate, routeB)
-  ) {
-    return [
-      {
-        ...firstCandidate,
-        type: "great-circle-crossing"
-      }
-    ];
-  }
-
-  if (
-    pointIsOnRouteArc(secondCandidate, routeA) &&
-    pointIsOnRouteArc(secondCandidate, routeB)
-  ) {
-    return [
-      {
-        ...secondCandidate,
-        type: "great-circle-crossing"
-      }
-    ];
-  }
-
-  return [];
-}
-
-function greatCirclePoints(route, numberOfSegments = 120) {
-  const startVector = pointToVector(route.start);
-  const endVector = pointToVector(route.end);
-
-  const angle = Math.acos(
-    clamp(
-      startVector.x * endVector.x +
-        startVector.y * endVector.y +
-        startVector.z * endVector.z,
-      -1,
-      1
-    )
-  );
-
-  if (angle < 1e-9) {
-    return [route.start];
-  }
-
-  const sineOfAngle = Math.sin(angle);
-  const points = [];
-
-  for (
-    let index = 0;
-    index <= numberOfSegments;
-    index += 1
-  ) {
-    const fraction = index / numberOfSegments;
-
-    const startWeight =
-      Math.sin((1 - fraction) * angle) /
-      sineOfAngle;
-
-    const endWeight =
-      Math.sin(fraction * angle) /
-      sineOfAngle;
-
-    const vector = normalizeVector({
-      x:
-        startWeight * startVector.x +
-        endWeight * endVector.x,
-      y:
-        startWeight * startVector.y +
-        endWeight * endVector.y,
-      z:
-        startWeight * startVector.z +
-        endWeight * endVector.z
-    });
-
-    points.push(vectorToPoint(vector));
-  }
-
-  return points;
-}
-
-/* ----------------------------------------
-   Airline column parsing
----------------------------------------- */
-
-function parseAirlineColumn(text, letter) {
+function parseColumn(text, letter) {
   const lines = String(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  let airlineName = `Airline ${letter}`;
+  let name = `Airline ${letter}`;
 
   if (lines[0] && lines[0].startsWith("#")) {
-    airlineName =
-      lines.shift().slice(1).trim() ||
-      airlineName;
+    name = lines.shift().slice(1).trim() || name;
   }
 
   const routes = [];
@@ -547,7 +191,7 @@ function parseAirlineColumn(text, letter) {
 
   for (const line of lines) {
     const codes = line
-      .replace(/[–—/,\t]/g, "-")
+      .replace(/[–—/,\t ]+/g, "-")
       .split("-")
       .map((code) => code.trim().toUpperCase())
       .filter(Boolean);
@@ -584,30 +228,20 @@ function parseAirlineColumn(text, letter) {
   }
 
   return {
-    airlineName,
+    name,
     routes,
     unknownCodes: [...unknownCodes]
   };
 }
 
-function getSelectedColumnPairs(
-  numberOfColumns,
-  compareMode,
-  pairPatternText
-) {
+/* ------------------------- Column pair selection ----------------------- */
+
+function selectedPairs(count, mode, patterns) {
   const pairs = [];
 
-  if (compareMode === "all") {
-    for (
-      let first = 0;
-      first < numberOfColumns;
-      first += 1
-    ) {
-      for (
-        let second = first + 1;
-        second < numberOfColumns;
-        second += 1
-      ) {
+  if (mode === "all") {
+    for (let first = 0; first < count; first += 1) {
+      for (let second = first + 1; second < count; second += 1) {
         pairs.push([first, second]);
       }
     }
@@ -615,64 +249,40 @@ function getSelectedColumnPairs(
     return pairs;
   }
 
-  if (compareMode === "pairwise") {
-    for (
-      let index = 0;
-      index + 1 < numberOfColumns;
-      index += 2
-    ) {
+  if (mode.startsWith("pairwise")) {
+    for (let index = 0; index + 1 < count; index += 2) {
       pairs.push([index, index + 1]);
+    }
+
+    if (mode === "pairwise-wrap" && count > 2) {
+      pairs.push([count - 1, 0]);
     }
 
     return pairs;
   }
 
-  if (compareMode === "pairwise-wrap") {
-    for (
-      let index = 0;
-      index + 1 < numberOfColumns;
-      index += 2
-    ) {
-      pairs.push([index, index + 1]);
-    }
-
-    if (numberOfColumns > 2) {
-      pairs.push([numberOfColumns - 1, 0]);
-    }
-
-    return pairs;
-  }
-
-  for (const token of pairPatternText.split(/[,\\s]+/)) {
-    const match = token
-      .toUpperCase()
-      .match(/^([A-F])-([A-F])$/);
+  for (const token of patterns.split(/[,;\s]+/)) {
+    const match = token.toUpperCase().match(/^([A-F])-([A-F])$/);
 
     if (!match) {
       continue;
     }
 
-    const first =
-      match[1].charCodeAt(0) - 65;
+    const first = match[1].charCodeAt(0) - 65;
+    const second = match[2].charCodeAt(0) - 65;
 
-    const second =
-      match[2].charCodeAt(0) - 65;
-
-    if (
-      first >= numberOfColumns ||
-      second >= numberOfColumns ||
-      first === second
-    ) {
-      continue;
-    }
-
-    const existsAlready = pairs.some(
-      ([savedFirst, savedSecond]) =>
-        savedFirst === first &&
-        savedSecond === second
+    const duplicate = pairs.some(
+      ([existingFirst, existingSecond]) =>
+        (existingFirst === first && existingSecond === second) ||
+        (existingFirst === second && existingSecond === first)
     );
 
-    if (!existsAlready) {
+    if (
+      first < count &&
+      second < count &&
+      first !== second &&
+      !duplicate
+    ) {
       pairs.push([first, second]);
     }
   }
@@ -680,61 +290,135 @@ function getSelectedColumnPairs(
   return pairs;
 }
 
-/* ----------------------------------------
-   User interface
----------------------------------------- */
+/* ------------------------------- Map ----------------------------------- */
 
-function addAirlineColumn(defaultText = "") {
-  if (routeColumns.children.length >= 6) {
+function clearMap() {
+  routeLayer.clearLayers();
+}
+
+function drawRoute(route, color, label) {
+  if (!window.Calculation) {
     return;
   }
 
-  const index = routeColumns.children.length;
-  const letter = String.fromCharCode(65 + index);
+  const points = window.Calculation.greatCirclePoints(route, 100);
 
-  const column = document.createElement("article");
+  const leafletPoints = points.map((point) => [
+    point.lat,
+    point.lon
+  ]);
 
-  column.className = "column";
-  column.style.setProperty(
-    "--color",
-    COLUMN_COLORS[index]
+  const line = L.polyline(leafletPoints, {
+    color,
+    weight: 2,
+    opacity: 0.84
+  });
+
+  line.bindPopup(
+    `<strong>${escapeHtml(label)}</strong><br>` +
+    `${escapeHtml(route.name)}`
   );
 
-  column.innerHTML = `
-    <div class="column-head">
-      <strong>${letter}: Airline routes</strong>
-      <button type="button" class="remove">Remove</button>
-    </div>
+  line.addTo(routeLayer);
 
-    <textarea
-      placeholder="# Airline name&#10;HND LAX&#10;HND JFK"
-    ></textarea>
-  `;
+  L.circleMarker(
+    [route.start.lat, route.start.lon],
+    {
+      radius: 4,
+      color,
+      weight: 1,
+      fillColor: color,
+      fillOpacity: 1
+    }
+  )
+    .bindTooltip(route.startCode, {
+      direction: "top"
+    })
+    .addTo(routeLayer);
 
-  column.querySelector("textarea").value = defaultText;
+  L.circleMarker(
+    [route.end.lat, route.end.lon],
+    {
+      radius: 4,
+      color,
+      weight: 1,
+      fillColor: color,
+      fillOpacity: 1
+    }
+  )
+    .bindTooltip(route.endCode, {
+      direction: "top"
+    })
+    .addTo(routeLayer);
+}
 
-  column
-    .querySelector(".remove")
-    .addEventListener("click", () => {
-      column.remove();
-    });
+function drawIntersection(row) {
+  const color =
+    row.type === "shared-airport"
+      ? "#facc15"
+      : "#ef4444";
 
-  routeColumns.appendChild(column);
+  const marker = L.circleMarker(
+    [row.latitude, row.longitude],
+    {
+      radius: 6,
+      color: "#ffffff",
+      weight: 1,
+      fillColor: color,
+      fillOpacity: 1
+    }
+  );
+
+  marker.bindPopup(
+    `<strong>${escapeHtml(row.type)}</strong><br>` +
+    `${escapeHtml(row.airlineA)}: ${escapeHtml(row.routeA)}<br>` +
+    `${escapeHtml(row.airlineB)}: ${escapeHtml(row.routeB)}<br>` +
+    `A distance: ${row.distanceA.toFixed(1)} km<br>` +
+    `B distance: ${row.distanceB.toFixed(1)} km`
+  );
+
+  marker.addTo(routeLayer);
+}
+
+function fitMap() {
+  const layers = routeLayer.getLayers();
+
+  if (!layers.length) {
+    map.setView([20, 0], 2);
+    return;
+  }
+
+  const group = L.featureGroup(layers);
+  const bounds = group.getBounds();
+
+  if (bounds.isValid()) {
+    map.fitBounds(bounds.pad(0.12));
+  }
+}
+
+/* ---------------------------- Results table ---------------------------- */
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function renderResults() {
-  if (lastRows.length === 0) {
+  if (!lastRows.length) {
     resultsBody.innerHTML = `
       <tr>
         <td colspan="10">
-          No individual route pairs matched the selected
-          columns and min/max route-pair intersection filter.
+          No individual route pairs matched the selected columns and
+          min/max route-pair intersection filter.
         </td>
       </tr>
     `;
 
     exportButtons.classList.add("hidden");
-
     return;
   }
 
@@ -742,16 +426,16 @@ function renderResults() {
     .map(
       (row) => `
         <tr>
-          <td>${row.airlineA}</td>
-          <td>${row.airlineB}</td>
-          <td>${row.routeA}</td>
-          <td>${row.routeB}</td>
-          <td>${row.pairCount}</td>
-          <td>${row.type}</td>
-          <td>${row.routeADistance.toFixed(1)} km</td>
-          <td>${row.routeBDistance.toFixed(1)} km</td>
-          <td>${row.lat.toFixed(6)}°</td>
-          <td>${row.lon.toFixed(6)}°</td>
+          <td>${escapeHtml(row.airlineA)}</td>
+          <td>${escapeHtml(row.airlineB)}</td>
+          <td>${escapeHtml(row.routeA)}</td>
+          <td>${escapeHtml(row.routeB)}</td>
+          <td>${row.routePairCount}</td>
+          <td>${escapeHtml(row.type)}</td>
+          <td>${row.distanceA.toFixed(1)} km</td>
+          <td>${row.distanceB.toFixed(1)} km</td>
+          <td>${row.latitude.toFixed(5)}</td>
+          <td>${row.longitude.toFixed(5)}</td>
         </tr>
       `
     )
@@ -760,395 +444,427 @@ function renderResults() {
   exportButtons.classList.remove("hidden");
 }
 
+function updateSummary(message) {
+  const summary = byId("analysis-summary");
+
+  if (summary) {
+    summary.textContent = message;
+  }
+}
+
+/* ----------------------------- Analysis -------------------------------- */
+
 function runAnalysis() {
   if (!databaseLoaded) {
-    alert("airports.csv is still loading.");
-
+    status.textContent = "Waiting for airports.csv to finish loading.";
     return;
   }
 
-  const airlineColumns = [
-    ...routeColumns.children
-  ].map((column, index) => {
-    const letter = String.fromCharCode(65 + index);
-
-    return parseAirlineColumn(
-      column.querySelector("textarea").value,
-      letter
-    );
-  });
-
-  let minimumIntersections = clamp(
-    Number(getById("min-intercepts").value) || 0,
-    0,
-    2
-  );
-
-  let maximumIntersections = clamp(
-    Number(getById("max-intercepts").value) || 2,
-    0,
-    2
-  );
-
-  if (minimumIntersections > maximumIntersections) {
-    [
-      minimumIntersections,
-      maximumIntersections
-    ] = [
-      maximumIntersections,
-      minimumIntersections
-    ];
+  if (!window.Calculation) {
+    status.textContent =
+      "calculation.js was not loaded. Check the script tag in index.html.";
+    return;
   }
 
-  const includeSharedAirports =
-    getById("count-shared").checked;
+  const columnElements = [...columns.querySelectorAll(".column")];
 
-  const columnPairs = getSelectedColumnPairs(
-    airlineColumns.length,
-    getById("compare-mode").value,
-    getById("pair-patterns").value
+  const parsedColumns = columnElements.map((column, index) => {
+    const textarea = column.querySelector("textarea");
+    const letter = String.fromCharCode(65 + index);
+
+    return parseColumn(textarea.value, letter);
+  });
+
+  const mode = byId("compare-mode").value;
+  const patterns = byId("pair-patterns").value;
+
+  const minimum = Math.max(
+    0,
+    Math.min(2, Number(byId("min-intercepts").value))
   );
 
-  routeLayerGroup.clearLayers();
+  const maximum = Math.max(
+    minimum,
+    Math.min(2, Number(byId("max-intercepts").value))
+  );
 
-  lastRows = [];
+  const includeShared = byId("count-shared").checked;
 
-  let evaluatedRoutePairs = 0;
+  const pairs = selectedPairs(
+    parsedColumns.length,
+    mode,
+    patterns
+  );
+
+  clearMap();
+
+  parsedColumns.forEach((column, index) => {
+    const color = COLORS[index % COLORS.length];
+
+    column.routes.forEach((route) => {
+      drawRoute(route, color, column.name);
+    });
+  });
+
+  const rows = [];
+  let comparedRoutePairs = 0;
   let rawIntersections = 0;
 
-  for (const [columnAIndex, columnBIndex] of columnPairs) {
-    const airlineA =
-      airlineColumns[columnAIndex];
-
-    const airlineB =
-      airlineColumns[columnBIndex];
+  for (const [indexA, indexB] of pairs) {
+    const airlineA = parsedColumns[indexA];
+    const airlineB = parsedColumns[indexB];
 
     for (const routeA of airlineA.routes) {
       for (const routeB of airlineB.routes) {
-        evaluatedRoutePairs += 1;
+        comparedRoutePairs += 1;
 
         const intersections =
-          routePairIntersections(
+          window.Calculation.routeIntersections(
             routeA,
             routeB,
-            includeSharedAirports
+            {
+              includeShared
+            }
           );
 
-        rawIntersections += intersections.length;
+        const count = intersections.length;
 
-        const pairCount = intersections.length;
-
-        /*
-          This is the important corrected logic:
-          min/max is checked per individual route line pair.
-        */
-        if (
-          pairCount < minimumIntersections ||
-          pairCount > maximumIntersections
-        ) {
+        if (count < minimum || count > maximum) {
           continue;
         }
 
-        for (const intersection of intersections) {
-          lastRows.push({
-            airlineA: airlineA.airlineName,
-            airlineB: airlineB.airlineName,
+        for (const point of intersections) {
+          rawIntersections += 1;
+
+          const row = {
+            airlineA: airlineA.name,
+            airlineB: airlineB.name,
             routeA: routeA.name,
             routeB: routeB.name,
-            pairCount,
-            type: intersection.type,
-            routeADistance: routeDistanceKm(routeA),
-            routeBDistance: routeDistanceKm(routeB),
-            lat: intersection.lat,
-            lon: intersection.lon,
-            columnAIndex,
-            columnBIndex
-          });
+            routePairCount: count,
+            type: point.method,
+            distanceA: window.Calculation.distance(
+              routeA.start,
+              point
+            ),
+            distanceB: window.Calculation.distance(
+              routeB.start,
+              point
+            ),
+            latitude: point.lat,
+            longitude: point.lon
+          };
+
+          rows.push(row);
+          drawIntersection(row);
         }
       }
     }
   }
 
-  const alreadyDrawnRoutes = new Set();
+  lastRows = rows;
 
-  for (const row of lastRows) {
-    const marker = L.circleMarker(
-      [row.lat, row.lon],
-      {
-        radius: 6,
-        color: "#facc15",
-        weight: 2,
-        fillOpacity: 1
-      }
-    );
-
-    marker
-      .addTo(routeLayerGroup)
-      .bindPopup(`
-        <b>${row.airlineA} × ${row.airlineB}</b><br>
-        ${row.routeA} × ${row.routeB}<br>
-        ${row.type}<br>
-        Route-pair count: ${row.pairCount}<br>
-        ${row.lat.toFixed(5)}, ${row.lon.toFixed(5)}
-      `);
-
-    const routesToDraw = [
-      {
-        columnIndex: row.columnAIndex,
-        routeName: row.routeA,
-        airlineName: row.airlineA
-      },
-      {
-        columnIndex: row.columnBIndex,
-        routeName: row.routeB,
-        airlineName: row.airlineB
-      }
-    ];
-
-    for (const item of routesToDraw) {
-      const uniqueKey =
-        `${item.columnIndex}:${item.routeName}`;
-
-      if (alreadyDrawnRoutes.has(uniqueKey)) {
-        continue;
-      }
-
-      const route = airlineColumns[
-        item.columnIndex
-      ].routes.find(
-        (candidate) =>
-          candidate.name === item.routeName
-      );
-
-      if (!route) {
-        continue;
-      }
-
-      L.polyline(
-        greatCirclePoints(route).map((point) => [
-          point.lat,
-          point.lon
-        ]),
-        {
-          color: COLUMN_COLORS[item.columnIndex],
-          weight: 3,
-          opacity: 0.9
-        }
-      )
-        .addTo(routeLayerGroup)
-        .bindPopup(
-          `${item.airlineName}: ${item.routeName}`
-        );
-
-      alreadyDrawnRoutes.add(uniqueKey);
-    }
-  }
-
-  const parseSummary = airlineColumns
-    .map((airline) => {
-      const unknownText = airline.unknownCodes.length
-        ? `; unknown: ${airline.unknownCodes.join(", ")}`
-        : "";
-
-      return (
-        `${airline.airlineName}: ` +
-        `${airline.routes.length} valid routes` +
-        unknownText
-      );
-    })
-    .join(" | ");
-
-  analysisSummary.textContent =
-    `${parseSummary}. ` +
-    `Compared ${evaluatedRoutePairs.toLocaleString()} ` +
-    `individual route pairs. ` +
-    `Found ${rawIntersections.toLocaleString()} raw intersections. ` +
-    `Displayed ${lastRows.length.toLocaleString()} result rows ` +
-    `after per-route-pair filter ` +
-    `${minimumIntersections}–${maximumIntersections}.`;
+  lastAnalysis = {
+    parsedColumns,
+    pairs,
+    comparedRoutePairs,
+    rawIntersections,
+    minimum,
+    maximum,
+    includeShared
+  };
 
   renderResults();
-}
+  fitMap();
 
-/* ----------------------------------------
-   Export
----------------------------------------- */
+  const invalidCodes = parsedColumns
+    .flatMap((column) => column.unknownCodes)
+    .filter(Boolean);
 
-function buildExportRows() {
-  return lastRows.map(
-    ({
-      columnAIndex,
-      columnBIndex,
-      ...row
-    }) => ({
-      "Airline A": row.airlineA,
-      "Airline B": row.airlineB,
-      "Route A": row.routeA,
-      "Route B": row.routeB,
-      "Route-pair intersections": row.pairCount,
-      "Intersection type": row.type,
-      "Route A distance km":
-        Number(row.routeADistance.toFixed(1)),
-      "Route B distance km":
-        Number(row.routeBDistance.toFixed(1)),
-      Latitude: Number(row.lat.toFixed(6)),
-      Longitude: Number(row.lon.toFixed(6))
-    })
+  const invalidMessage = invalidCodes.length
+    ? ` Unknown airport codes skipped: ${[
+        ...new Set(invalidCodes)
+      ].join(", ")}.`
+    : "";
+
+  updateSummary(
+    `${parsedColumns
+      .map(
+        (column) =>
+          `${column.name}: ${column.routes.length} valid routes`
+      )
+      .join(" | ")}. ` +
+    `Compared ${comparedRoutePairs} individual route pairs. ` +
+    `Found ${rawIntersections} raw intersections. ` +
+    `Displayed ${rows.length} result rows after per-route-pair filter ` +
+    `${minimum}-${maximum}.` +
+    invalidMessage
   );
 }
 
-function downloadFile(filename, content, type) {
+/* ----------------------------- Exports --------------------------------- */
+
+function downloadFile(filename, content, mimeType) {
   const blob = new Blob([content], {
-    type
+    type: mimeType
   });
 
   const url = URL.createObjectURL(blob);
 
-  const link = document.createElement("a");
+  const anchor = document.createElement("a");
 
-  link.href = url;
-  link.download = filename;
+  anchor.href = url;
+  anchor.download = filename;
 
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 500);
+  URL.revokeObjectURL(url);
 }
 
-function downloadTxt() {
-  const rows = buildExportRows();
+function makeCsv(rows) {
+  const headers = [
+    "Airline A",
+    "Airline B",
+    "Route A",
+    "Route B",
+    "Route-pair count",
+    "Type",
+    "A distance km",
+    "B distance km",
+    "Latitude",
+    "Longitude"
+  ];
 
-  const output = rows
-    .map((row) =>
-      Object.entries(row)
-        .map(([key, value]) => `${key}: ${value}`)
-        .join("\n")
+  const values = rows.map((row) => [
+    row.airlineA,
+    row.airlineB,
+    row.routeA,
+    row.routeB,
+    row.routePairCount,
+    row.type,
+    row.distanceA.toFixed(3),
+    row.distanceB.toFixed(3),
+    row.latitude.toFixed(6),
+    row.longitude.toFixed(6)
+  ]);
+
+  const escapeCsv = (value) =>
+    `"${String(value).replace(/"/g, "\"\"")}"`;
+
+  return [
+    headers.map(escapeCsv).join(","),
+    ...values.map((row) => row.map(escapeCsv).join(","))
+  ].join("\n");
+}
+
+function exportTxt() {
+  const output = lastRows
+    .map(
+      (row) =>
+        [
+          `${row.airlineA} vs ${row.airlineB}`,
+          `${row.routeA} × ${row.routeB}`,
+          `count=${row.routePairCount}`,
+          `type=${row.type}`,
+          `A=${row.distanceA.toFixed(1)} km`,
+          `B=${row.distanceB.toFixed(1)} km`,
+          `lat=${row.latitude.toFixed(6)}`,
+          `lon=${row.longitude.toFixed(6)}`
+        ].join(" | ")
     )
-    .join("\n\n");
+    .join("\n");
 
   downloadFile(
     "result.txt",
-    output,
+    output || "No qualifying route-pair intersections.",
     "text/plain;charset=utf-8"
   );
 }
 
-function downloadCsv() {
-  const rows = buildExportRows();
-
-  if (!rows.length) {
-    return;
-  }
-
-  const headers = Object.keys(rows[0]);
-
-  const quote = (value) =>
-    `"${String(value).replaceAll("\"", "\"\"")}"`;
-
-  const output = [
-    headers.join(","),
-    ...rows.map((row) =>
-      headers
-        .map((header) => quote(row[header]))
-        .join(",")
-    )
-  ].join("\n");
-
+function exportCsv() {
   downloadFile(
     "result.csv",
-    output,
+    makeCsv(lastRows),
     "text/csv;charset=utf-8"
   );
 }
 
-function downloadXlsx() {
-  if (
-    !window.XLSX ||
-    lastRows.length === 0
-  ) {
+function exportXlsx() {
+  if (typeof XLSX === "undefined") {
+    status.textContent =
+      "Excel export library did not load. CSV export is still available.";
     return;
   }
 
-  const rows = buildExportRows();
+  const worksheetRows = lastRows.map((row) => ({
+    "Airline A": row.airlineA,
+    "Airline B": row.airlineB,
+    "Route A": row.routeA,
+    "Route B": row.routeB,
+    "Route-pair count": row.routePairCount,
+    Type: row.type,
+    "A distance km": Number(row.distanceA.toFixed(3)),
+    "B distance km": Number(row.distanceB.toFixed(3)),
+    Latitude: Number(row.latitude.toFixed(6)),
+    Longitude: Number(row.longitude.toFixed(6))
+  }));
 
   const workbook = XLSX.utils.book_new();
 
+  const worksheet = XLSX.utils.json_to_sheet(worksheetRows);
+
   XLSX.utils.book_append_sheet(
     workbook,
-    XLSX.utils.json_to_sheet(rows),
-    "Intercepts"
+    worksheet,
+    "Intersections"
   );
 
   XLSX.writeFile(workbook, "result.xlsx");
 }
 
-/* ----------------------------------------
-   Event wiring
----------------------------------------- */
+/* -------------------------- Dynamic UI columns ------------------------- */
 
-getById("add-column").addEventListener(
-  "click",
-  () => addAirlineColumn()
-);
+function columnTemplate(letter, color, value = "") {
+  return `
+    <section
+      class="column"
+      style="--color: ${color}"
+      data-letter="${letter}"
+    >
+      <div class="column-head">
+        <strong>${letter}: Airline routes</strong>
 
-getById("run-analysis").addEventListener(
-  "click",
-  runAnalysis
-);
+        <button
+          class="remove"
+          type="button"
+          aria-label="Remove column ${letter}"
+        >
+          Remove
+        </button>
+      </div>
 
-getById("compare-mode").addEventListener(
-  "change",
-  (event) => {
-    getById("pair-pattern-wrap").style.display =
-      event.target.value === "selected"
-        ? "flex"
-        : "none";
-  }
-);
+      <textarea
+        spellcheck="false"
+        placeholder="# Airline name&#10;HND LAX&#10;LAX JFK"
+      >${escapeHtml(value)}</textarea>
+    </section>
+  `;
+}
 
-exportButtons.addEventListener("click", (event) => {
-  const exportType = event.target.dataset.export;
+function reletterColumns() {
+  const columnElements = [...columns.querySelectorAll(".column")];
 
-  if (!exportType || lastRows.length === 0) {
+  columnElements.forEach((column, index) => {
+    const letter = String.fromCharCode(65 + index);
+    const color = COLORS[index % COLORS.length];
+
+    column.dataset.letter = letter;
+    column.style.setProperty("--color", color);
+
+    const title = column.querySelector(".column-head strong");
+
+    if (title) {
+      title.textContent = `${letter}: Airline routes`;
+    }
+
+    const removeButton = column.querySelector(".remove");
+
+    if (removeButton) {
+      removeButton.setAttribute(
+        "aria-label",
+        `Remove column ${letter}`
+      );
+    }
+  });
+}
+
+function addColumn(value = "") {
+  const count = columns.querySelectorAll(".column").length;
+
+  if (count >= 6) {
+    status.textContent = "A maximum of six airline columns is supported.";
     return;
   }
 
-  if (exportType === "txt") {
-    downloadTxt();
+  const letter = String.fromCharCode(65 + count);
+  const color = COLORS[count % COLORS.length];
+
+  columns.insertAdjacentHTML(
+    "beforeend",
+    columnTemplate(letter, color, value)
+  );
+
+  reletterColumns();
+}
+
+/* ----------------------------- Listeners -------------------------------- */
+
+byId("add-column").addEventListener("click", () => {
+  addColumn();
+});
+
+columns.addEventListener("click", (event) => {
+  const removeButton = event.target.closest(".remove");
+
+  if (!removeButton) {
+    return;
   }
 
-  if (exportType === "csv") {
-    downloadCsv();
+  const column = removeButton.closest(".column");
+
+  if (!column) {
+    return;
   }
 
-  if (exportType === "xlsx") {
-    downloadXlsx();
+  if (columns.querySelectorAll(".column").length <= 2) {
+    status.textContent =
+      "Keep at least two airline columns to compare routes.";
+    return;
+  }
+
+  column.remove();
+  reletterColumns();
+});
+
+byId("run-analysis").addEventListener("click", runAnalysis);
+
+byId("compare-mode").addEventListener("change", (event) => {
+  const selectedMode = event.target.value;
+
+  byId("pair-pattern-wrap").classList.toggle(
+    "hidden",
+    selectedMode !== "selected"
+  );
+});
+
+exportButtons.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-export]");
+
+  if (!button) {
+    return;
+  }
+
+  const type = button.dataset.export;
+
+  if (type === "txt") {
+    exportTxt();
+  }
+
+  if (type === "csv") {
+    exportCsv();
+  }
+
+  if (type === "xlsx") {
+    exportXlsx();
   }
 });
 
-/* ----------------------------------------
-   Starter test data
----------------------------------------- */
+/* ------------------------------- Start --------------------------------- */
 
-addAirlineColumn(
-  [
-    "# JAL",
-    "HND LAX",
-    "HND JFK",
-    "HND LHR"
-  ].join("\n")
-);
+addColumn("# JAL\nHND LAX\nHND JFK\nHND LHR");
 
-addAirlineColumn(
-  [
-    "# CA",
-    "LAX HND",
-    "LAX JFK",
-    "LAX LHR"
-  ].join("\n")
-);
+addColumn("# CA\nLAX HND\nLAX JFK\nLAX LHR");
 
 loadAirportsCSV();
