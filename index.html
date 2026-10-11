@@ -7,27 +7,36 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .control-panel { padding: 15px; background: #2c3e50; color: white; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
-        .control-panel label { display: flex; flex-direction: column; font-size: 14px; }
-        .control-panel input { margin-top: 5px; }
-        button { padding: 8px 15px; background: #e74c3c; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; }
+        .control-panel { padding: 15px; background: #2c3e50; color: white; display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-start; }
+        .control-panel label { display: flex; flex-direction: column; font-size: 14px; color: #ecf0f1; }
+        .control-panel textarea { margin-top: 5px; width: 320px; height: 160px; padding: 8px; border-radius: 4px; border: 1px solid #bdc3c7; font-family: monospace; }
+        button { padding: 8px 15px; background: #e74c3c; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; height: 40px; align-self: center; }
         button:hover { background: #c0392b; }
         #map { height: 65vh; width: 100%; }
         #results-container { height: 20vh; overflow-y: auto; background: #ecf0f1; padding: 10px; font-family: monospace; font-size: 13px; }
         table { width: 100%; border-collapse: collapse; background: white; }
         th, td { border: 1px solid #bdc3c7; padding: 6px; text-align: left; color: #333; }
         th { background: #34495e; color: white; }
+        #status-message { margin-left: 10px; font-size: 13px; color: #f1c40f; align-self: center; }
     </style>
 </head>
 <body>
     <div class="control-panel">
-        <label>File 1 (Routes A - Cyan Color): 
-            <input type="file" id="file1" accept=".csv, .xlsx, .txt">
+        <label>
+            Text Routes A (one per line, use CODE1-CODE2):
+            <textarea id="text1" placeholder="HKG-JFK\nVHHH-KJFK\nLHR-DXB"></textarea>
         </label>
-        <label>File 2 (Routes B - Magenta Color): 
-            <input type="file" id="file2" accept=".csv, .xlsx, .txt">
+
+        <label>
+            Text Routes B (one per line, use CODE1-CODE2):
+            <textarea id="text2" placeholder="SIN-NRT\nDXB-OMDB\nJFK-KJFK"></textarea>
         </label>
-        <button onclick="processUploadedFiles()">Plot & Find Intercepts</button>
+
+        <div style="display:flex; flex-direction:column; justify-content:center;">
+            <button onclick="processTextAreas()">Plot & Find Intercepts</button>
+        </div>
+
+        <span id="status-message">Connecting to OurAirports database...</span>
     </div>
 
     <div id="map"></div>
@@ -36,21 +45,21 @@
         <table id="results-table">
             <thead>
                 <tr>
-                    <th>Route A (File 1)</th>
-                    <th>Route B (File 2)</th>
+                    <th>Route A (Text 1)</th>
+                    <th>Route B (Text 2)</th>
                     <th>Intercept Lat</th>
                     <th>Intercept Lon</th>
                 </tr>
             </thead>
             <tbody id="results-body">
-                <tr><td colspan="4">Upload files and click 'Plot & Find Intercepts' to run analysis.</td></tr>
+                <tr><td colspan="4">Enter routes and click 'Plot & Find Intercepts' to run analysis.</td></tr>
             </tbody>
         </table>
     </div>
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- SheetJS for Excel/CSV Parsing -->
+    <!-- SheetJS for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="main.js"></script>
 </body>
