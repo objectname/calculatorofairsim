@@ -1,33 +1,79 @@
 // ==========================================
-// 1. CONFIGURATION & AIRPORT DATABASE
+// Calculator of AirSim - main.js
+// Loads airports.csv from repo root, parses it, and runs route intersection logic.
 // ==========================================
-const FIXED_SPEED_KMH = 9360 / 22; // ~425.45 km/h
+
 const EARTH_RADIUS_KM = 6371;
+let AIRPORTS = {}; // maps code -> { lat, lon }
+let databaseLoaded = false;
 
-// Sample database (expand with full global ICAO/IATA data as needed)
-const AIRPORTS = {
-    "HKG": { name: "Hong Kong", lat: 22.3080, lon: 113.9185 },
-    "VHHH": { name: "Hong Kong", lat: 22.3080, lon: 113.9185 },
-    "JFK": { name: "New York JFK", lat: 40.6413, lon: -73.7781 },
-    "KJFK": { name: "New York JFK", lat: 40.6413, lon: -73.7781 },
-    "LHR": { name: "London Heathrow", lat: 51.4700, lon: -0.4543 },
-    "EGLL": { name: "London Heathrow", lat: 51.4700, lon: -0.4543 },
-    "SIN": { name: "Singapore Changi", lat: 1.3644, lon: 103.9915 },
-    "WSSS": { name: "Singapore Changi", lat: 1.3644, lon: 103.9915 },
-    "DXB": { name: "Dubai", lat: 25.2532, lon: 55.3657 },
-    "OMDB": { name: "Dubai", lat: 25.2532, lon: 55.3657 },
-    "TYO": { name: "Tokyo", lat: 35.6762, lon: 139.6503 },
-    "NRT": { name: "Tokyo Narita", lat: 35.7720, lon: 140.3929 }
-};
+// Update status text in the UI (if present)
+function setStatus(msg) {
+    const el = document.getElementById('status-message');
+    if (el) el.textContent = msg;
+}
+
+// Load and parse airports.csv from repository root
+async function loadAirportsCSV() {
+    setStatus('Loading airports.csv...');
+    try {
+        const resp = await fetch('./airports.csv');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+        const csvText = await resp.text();
+
+        // Parse CSV using SheetJS (XLSX) which is included on the page
+        // This handles quoted fields and commas
+        const workbook = XLSX.read(csvText, { type: 'string' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        // OurAirports columns (0-based after sheet_to_json with header:1):
+        // 1: ident
+        // 4: latitude_deg
+        // 5: longitude_deg
+        // 12: icao_code
+        // 13: iata_code
+
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row) continue;
+            // Protect against short rows
+            const ident = row[1] ? String(row[1]).trim().toUpperCase() : '';
+            const latRaw = row[4];
+            const lonRaw = row[5];
+            const icao = row[12] ? String(row[12]).trim().toUpperCase() : '';
+            const iata = row[13] ? String(row[13]).trim().toUpperCase() : '';
+
+            const lat = Number(latRaw);
+            const lon = Number(lonRaw);
+            if (Number.isFinite(lat) && Number.isFinite(lon)) {
+                const entry = { lat, lon };
+                if (ident) AIRPORTS[ident] = entry;
+                if (icao) AIRPORTS[icao] = entry;
+                if (iata) AIRPORTS[iata] = entry;
+            }
+        }
+
+        databaseLoaded = true;
+        setStatus(`airports.csv loaded (${Object.keys(AIRPORTS).length} codes)`);
+        console.log('airports.csv loaded, entries:', Object.keys(AIRPORTS).length);
+    } catch (err) {
+        console.error('Failed to load/parse airports.csv:', err);
+        setStatus('Failed to load airports.csv — check console for details');
+    }
+}
+
+// Run loader immediately
+loadAirportsCSV();
 
 // ==========================================
-// 2. INITIALIZE MAP
+// Map initialization
 // ==========================================
 const map = L.map('map').setView([20, 0], 2);
 
 const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19,
-    attribution: 'Tiles &copy; Esri'
+    attribution: 'Tiles © Esri'
 }).addTo(map);
 
 const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -35,11 +81,11 @@ const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
     attribution: '© OpenStreetMap'
 });
 
-L.control.layers({ "Satellite": satelliteLayer, "OpenStreetMap": osmLayer }).addTo(map);
+L.control.layers({ 'Satellite': satelliteLayer, 'OpenStreetMap': osmLayer }).addTo(map);
 let routeLayerGroup = L.layerGroup().addTo(map);
 
 // ==========================================
-// 3. MATH & GEOMETRY UTILITIES
+// Geometry helpers
 // ==========================================
 function toRad(deg) { return deg * (Math.PI / 180); }
 function toDeg(rad) { return rad * (180 / Math.PI); }
@@ -54,23 +100,21 @@ function vectorToLatLon(v) {
     return { lat: toDeg(Math.atan2(v.z, hyp)), lon: toDeg(Math.atan2(v.y, v.x)) };
 }
 
-function calculateGDC(lat1, lon1, lat2, lon2) {
+function crossProduct(a, b) {
+    return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
+}
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
     const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
-    const a = Math.sin(dLat / 2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2)**2;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
     return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function crossProduct(v1, v2) {
-    return { x: v1.y * v2.z - v1.z * v2.y, y: v1.z * v2.x - v1.x * v2.z, z: v1.x * v2.y - v1.y * v2.x };
-}
-
-// Check if intercept point lies strictly on the route segment between start and end
-function isPointOnSegment(p, start, end) {
-    const totalDist = calculateGDC(start.lat, start.lon, end.lat, end.lon);
-    const dist1 = calculateGDC(start.lat, start.lon, p.lat, p.lon);
-    const dist2 = calculateGDC(p.lat, p.lon, end.lat, end.lon);
-    // Allow a tiny tolerance for floating-point calculation errors (~1.0 km)
-    return Math.abs((dist1 + dist2) - totalDist) < 1.0;
+function isPointOnSegment(p, start, end, toleranceKm = 1.5) {
+    const total = haversineDistance(start.lat, start.lon, end.lat, end.lon);
+    const d1 = haversineDistance(start.lat, start.lon, p.lat, p.lon);
+    const d2 = haversineDistance(p.lat, p.lon, end.lat, end.lon);
+    return Math.abs((d1 + d2) - total) <= toleranceKm;
 }
 
 function findGreatCircleSegmentIntersection(r1, r2) {
@@ -81,149 +125,113 @@ function findGreatCircleSegmentIntersection(r1, r2) {
 
     const n1 = crossProduct(v1, v2);
     const n2 = crossProduct(v3, v4);
-    const intersectionVector = crossProduct(n1, n2);
-    const length = Math.sqrt(intersectionVector.x ** 2 + intersectionVector.y ** 2 + intersectionVector.z ** 2);
+    const inter = crossProduct(n1, n2);
+    const len = Math.sqrt(inter.x ** 2 + inter.y ** 2 + inter.z ** 2);
+    if (len === 0) return null;
 
-    if (length === 0) return null;
-
-    const normVector = { x: intersectionVector.x / length, y: intersectionVector.y / length, z: intersectionVector.z / length };
-    const p1 = vectorToLatLon(normVector);
-    // Antipodal check point
+    const norm = { x: inter.x / len, y: inter.y / len, z: inter.z / len };
+    const p1 = vectorToLatLon(norm);
     const p2 = { lat: -p1.lat, lon: p1.lon > 0 ? p1.lon - 180 : p1.lon + 180 };
 
-    let validPoint = null;
-    if (isPointOnSegment(p1, r1.start, r1.end) && isPointOnSegment(p1, r2.start, r2.end)) {
-        validPoint = p1;
-    } else if (isPointOnSegment(p2, r1.start, r1.end) && isPointOnSegment(p2, r2.start, r2.end)) {
-        validPoint = p2;
+    if (isPointOnSegment(p1, r1.start, r1.end) && isPointOnSegment(p1, r2.start, r2.end)) return p1;
+    if (isPointOnSegment(p2, r1.start, r1.end) && isPointOnSegment(p2, r2.start, r2.end)) return p2;
+    return null;
+}
+
+// ==========================================
+// Parsing text inputs
+// ==========================================
+function parseRouteLine(line) {
+    if (!line) return null;
+    const cleaned = String(line).trim();
+    if (!cleaned) return null;
+
+    // Accept CODE1-CODE2 or CODE1/CODE2 or "CODE1 CODE2" or comma-separated
+    const parts = cleaned.replace(/[-–\/]/g, ' ').replace(/,/g, ' ').split(/\s+/);
+    if (parts.length < 2) return null;
+    const c1 = parts[0].toUpperCase();
+    const c2 = parts[1].toUpperCase();
+
+    const a1 = AIRPORTS[c1];
+    const a2 = AIRPORTS[c2];
+    if (!a1 || !a2) return null;
+    return { name: `${c1}-${c2}`, start: a1, end: a2 };
+}
+
+function parseTextRoutes(text) {
+    const out = [];
+    const lines = String(text).split('\n');
+    for (const ln of lines) {
+        const r = parseRouteLine(ln);
+        if (r) out.push(r);
     }
-    return validPoint;
+    return out;
 }
 
 // ==========================================
-// 4. FILE PARSING LOGIC (CSV, XLSX, TXT)
+// Main UI workflow
 // ==========================================
-async function parseFile(file) {
-    return नई Promise((resolve) => {
-        const reader = new FileReader();
-        const extension = file.name.split('.').pop().toLowerCase();
+function processTextAreas() {
+    if (!databaseLoaded) {
+        alert('Airport database is still loading. Please wait a moment and try again.');
+        return;
+    }
 
-        if (extension === 'xlsx' || extension === 'xls' || extension === 'csv') {
-            reader.onload = (e) => {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const firstSheet = workbook.SheetNames[0];
-                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1 });
-                resolve(extractRoutesFromRows(rows));
-            };
-            reader.readAsArrayBuffer(file);
-        } else {
-            // Plain text parsing (.txt)
-            reader.onload = (e) => {
-                const text = e.target.result;
-                const rows = text.split('\n').map(line => line.trim().split(/[\s,]+/));
-                resolve(extractRoutesFromRows(rows));
-            };
-            reader.readAsText(file);
-        }
-    });
-}
-
-function extractRoutesFromRows(rows) {
-    const routes = [];
-    rows.forEach(row => {
-        let code1 = "", code2 = "";
-        if (row.length >= 2 && row[0] && row[1]) {
-            code1 = row[0].trim();
-            code2 = row[1].trim();
-        } else if (row.length === 1 && row[0]) {
-            // Handle formats like "HKG-JFK" or "VHHH-KJFK"
-            const parts = row[0].split(/[-–/]/);
-            if (parts.length >= 2) {
-                code1 = parts[0].trim();
-                code2 = parts[1].trim();
-            }
-        }
-
-        if (code1 && code2) {
-            const apt1 = AIRPORTS[code1.toUpperCase()];
-            const apt2 = AIRPORTS[code2.toUpperCase()];
-            if (apt1 && apt2) {
-                routes.push({
-                    name: `${code1.toUpperCase()}-${code2.toUpperCase()}`,
-                    start: apt1,
-                    end: apt2
-                });
-            }
-        }
-    });
-    return routes;
-}
-
-// ==========================================
-// 5. MAIN EXECUTION & INTERCEPT MATRICES
-// ==========================================
-async function processUploadedFiles() {
-    const file1Input = document.getElementById('file1').files[0];
-    const file2Input = document.getElementById('file2').files[0];
-
-    if (!file1Input || !file2Input) {
-        alert("Please upload both files to compare and find intercepts.");
+    const t1 = document.getElementById('text1').value;
+    const t2 = document.getElementById('text2').value;
+    if (!t1 || !t2 || !t1.trim() || !t2.trim()) {
+        alert('Please enter routes in both text boxes (one route per line, format CODE1-CODE2).');
         return;
     }
 
     routeLayerGroup.clearLayers();
-    const resultsTableBody = document.getElementById('results-body');
-    resultsTableBody.innerHTML = `<tr><td colspan="4">Processing files...</td></tr>`;
+    const resultsBody = document.getElementById('results-body');
+    if (resultsBody) resultsBody.innerHTML = `<tr><td colspan="4">Processing...</td></tr>`;
 
-    const routesA = await parseFile(file1Input);
-    const routesB = await parseFile(file2Input);
+    const routesA = parseTextRoutes(t1);
+    const routesB = parseTextRoutes(t2);
+    const records = [];
 
-    let interceptRecords = [];
-
-    // Plot Routes from File 1 (Cyan Color)
+    // Plot A routes (cyan)
     routesA.forEach(r => {
         L.polyline([[r.start.lat, r.start.lon], [r.end.lat, r.end.lon]], { color: 'cyan', weight: 3, opacity: 0.8 })
             .addTo(routeLayerGroup)
-            .bindPopup(`File 1 Route: ${r.name}`);
+            .bindPopup(`A: ${r.name}`);
     });
 
-    // Plot Routes from File 2 (Magenta Color)
+    // Plot B routes (magenta)
     routesB.forEach(r => {
         L.polyline([[r.start.lat, r.start.lon], [r.end.lat, r.end.lon]], { color: 'magenta', weight: 3, opacity: 0.8 })
             .addTo(routeLayerGroup)
-            .bindPopup(`File 2 Route: ${r.name}`);
+            .bindPopup(`B: ${r.name}`);
     });
 
-    // Cross-check Intercepts between File 1 and File 2 routes
+    // Cross-check
     routesA.forEach(ra => {
         routesB.forEach(rb => {
-            const intersection = findGreatCircleSegmentIntersection(ra, rb);
-            if (intersection) {
-                interceptRecords.push({
-                    routeNameA: ra.name,
-                    routeNameB: rb.name,
-                    lat: intersection.lat,
-                    lon: intersection.lon
-                });
-
-                // Plot Intercept Marker on Map
-                L.circleMarker([intersection.lat, intersection.lon], { color: 'yellow', radius: 6, fillOpacity: 1 })
+            const hit = findGreatCircleSegmentIntersection(ra, rb);
+            if (hit) {
+                records.push({ a: ra.name, b: rb.name, lat: hit.lat, lon: hit.lon });
+                L.circleMarker([hit.lat, hit.lon], { radius: 6, color: 'yellow', fillOpacity: 1 })
                     .addTo(routeLayerGroup)
-                    .bindPopup(`<b>Intercept Found!</b><br>A: ${ra.name}<br>B: ${rb.name}<br>Lat: ${intersection.lat.toFixed(2)}°, Lon: ${intersection.lon.toFixed(2)}°`);
+                    .bindPopup(`<b>Intercept</b><br>A: ${ra.name}<br>B: ${rb.name}<br>Lat: ${hit.lat.toFixed(4)}<br>Lon: ${hit.lon.toFixed(4)}`);
             }
         });
     });
 
-    // Populate Results Table with A name / B name columns
-    if (interceptRecords.length > 0) {
-        resultsTableBody.innerHTML = "";
-        interceptRecords.forEach(rec => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td><b>${rec.routeNameA}</b></td><td><b>${rec.routeNameB}</b></td><td>${rec.lat.toFixed(4)}°</td><td>${rec.lon.toFixed(4)}°</td>`;
-            resultsTableBody.appendChild(tr);
-        });
-    } else {
-        resultsTableBody.innerHTML = `<tr><td colspan="4">No valid segment intercepts found between the two files.</td></tr>`;
+    // Populate results
+    if (!resultsBody) return;
+    if (records.length === 0) {
+        resultsBody.innerHTML = `<tr><td colspan="4">No valid intercepts found.</td></tr>`;
+        return;
+    }
+    resultsBody.innerHTML = '';
+    for (const r of records) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td><b>${r.a}</b></td><td><b>${r.b}</b></td><td>${r.lat.toFixed(6)}°</td><td>${r.lon.toFixed(6)}°</td>`;
+        resultsBody.appendChild(tr);
     }
 }
+
+// Expose function for button
+window.processTextAreas = processTextAreas;
