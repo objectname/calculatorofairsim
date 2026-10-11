@@ -190,10 +190,19 @@ function parseColumn(text, letter) {
   const unknownCodes = new Set();
 
   for (const line of lines) {
+    /*
+      Accept all of these:
+      HND LAX
+      HND-LAX
+      HND / LAX
+      HND,LAX
+      HND    LAX
+    */
     const codes = line
-      .replace(/[–—/,\t ]+/g, "-")
-      .split("-")
-      .map((code) => code.trim().toUpperCase())
+      .trim()
+      .toUpperCase()
+      .split(/[\s,;\/\-_–—]+/)
+      .map((code) => code.trim())
       .filter(Boolean);
 
     if (codes.length < 2) {
