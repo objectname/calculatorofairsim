@@ -1,110 +1,48 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Batch Flight Route & Intercept Analyzer</title>
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .control-panel { padding: 12px; background: #2c3e50; color: white; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
-        .control-panel label { display: flex; flex-direction: column; font-size: 14px; color: #ecf0f1; }
-        .control-panel textarea { margin-top: 5px; width: 280px; height: 120px; padding: 8px; border-radius: 4px; border: 1px solid #bdc3c7; font-family: monospace; }
-        .columns { display:flex; gap:12px; align-items:flex-start; }
-        .route-column { background: transparent; padding: 6px; border-radius:6px; }
-        .route-column .column-name { width: 280px; margin-top:6px; padding:6px; border-radius:4px; border:1px solid #bdc3c7; }
-        button { padding: 8px 12px; background: #e74c3c; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; height: 36px; }
-        button:hover { background: #c0392b; }
-        #map { height: 62vh; width: 100%; }
-        #results-container { height: 22vh; overflow-y: auto; background: #ecf0f1; padding: 10px; font-family: monospace; font-size: 13px; }
-        table { width: 100%; border-collapse: collapse; background: white; }
-        th, td { border: 1px solid #bdc3c7; padding: 6px; text-align: left; color: #333; }
-        th { background: #34495e; color: white; }
-        #status-message { margin-left: 10px; font-size: 13px; color: #f1c40f; align-self: center; }
-        .controls-right { display:flex; flex-direction:column; gap:8px; }
-        .small { font-size:13px; }
-        .inline { display:flex; gap:8px; align-items:center; }
-        .note { color:#bdc3c7; font-size:12px; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Airline Route Intercept Analyzer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root { color-scheme: dark; --bg:#101826; --panel:#1d2a3d; --line:#3d5572; --accent:#36bffa; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:#edf5ff; font:14px system-ui,-apple-system,"Segoe UI",sans-serif; }
+    header { padding:16px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:21px; } #status-message { margin:6px 0 0; color:#f8c85b; }
+    main { padding:16px; } .toolbar,.route-columns,.exports { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+    .toolbar { background:var(--panel); padding:12px; border:1px solid var(--line); border-radius:8px; }
+    label { display:flex; flex-direction:column; gap:5px; font-size:12px; font-weight:700; }
+    input,select,button,textarea { font:inherit; border-radius:6px; border:1px solid var(--line); }
+    input,select,textarea { color:#edf5ff; background:#0b1220; padding:8px; }
+    input[type=number] { width:85px; } button { cursor:pointer; padding:9px 12px; color:white; background:#147eb5; font-weight:700; } button:hover { background:#0e6290; } button.secondary { background:#334a65; } button.danger { background:#9f3040; }
+    .route-columns { margin-top:16px; align-items:stretch; } .route-column { flex:1 1 270px; min-width:240px; max-width:calc(33.333% - 8px); background:var(--panel); border:1px solid var(--line); border-top:4px solid var(--column-color); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; }
+    .column-header { display:flex; align-items:center; gap:8px; } .column-header strong { flex:1; } textarea { width:100%; min-height:165px; resize:vertical; font:13px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .hint { margin:0; font-size:12px; color:#b6c5d8; } .exports { margin:14px 0; } .hidden { display:none; }
+    #map { height:52vh; min-height:350px; border:1px solid var(--line); border-radius:8px; }
+    .results { margin-top:16px; padding:12px; color:#182334; background:#f7fafc; border-radius:8px; } h2 { margin:0 0 10px; font-size:16px; } .table-wrap { overflow:auto; } table { width:100%; min-width:900px; border-collapse:collapse; } th,td { padding:7px; border:1px solid #c7d2df; text-align:left; } th { color:white; background:#2b415f; }
+    @media(max-width:850px){.route-column{max-width:none;flex-basis:100%}#map{height:45vh}}
+  </style>
 </head>
 <body>
-    <div class="control-panel">
-        <div class="columns" id="columns-container">
-            <!-- Airline columns are injected here -->
-        </div>
-
-        <div class="controls-right">
-            <div class="inline">
-                <button id="add-column">Add column</button>
-                <button id="remove-column">Remove column</button>
-                <span id="status-message">Connecting to OurAirports database...</span>
-            </div>
-
-            <div class="inline">
-                <label class="small">Compare mode
-                    <select id="compare-mode" class="small">
-                        <option value="selected">Selected pair</option>
-                        <option value="pairwise">Pairwise (A-B, C-D...)</option>
-                        <option value="allpairs">All pairs</option>
-                    </select>
-                </label>
-
-                <label class="small">Wrap last -> first
-                    <input type="checkbox" id="wrap-pair" title="When pairwise mode is selected, compare last with first" />
-                </label>
-            </div>
-
-            <div class="inline">
-                <label class="small">Compare A
-                    <select id="compare-a" class="small"></select>
-                </label>
-                <label class="small">Compare B
-                    <select id="compare-b" class="small"></select>
-                </label>
-            </div>
-
-            <div class="inline">
-                <label class="small">Min intercepts
-                    <input type="number" id="min-intercepts" value="1" min="1" max="100" class="small" />
-                </label>
-                <label class="small">Max intercepts
-                    <input type="number" id="max-intercepts" value="10" min="1" max="100" class="small" />
-                </label>
-            </div>
-
-            <div class="inline">
-                <button id="plot-button">Plot & Find Intercepts</button>
-                <button id="download-button">Download result.txt</button>
-            </div>
-
-            <div class="note">Tip: To name a column inside its text area, start the first non-empty line with <code># Airline Name</code> and it will be used as that column's name.</div>
-        </div>
-    </div>
-
-    <div id="map"></div>
-    <div id="results-container">
-        <b>Intercept Results Log:</b>
-        <table id="results-table">
-            <thead>
-                <tr>
-                    <th>Pair</th>
-                    <th>Airline A</th>
-                    <th>Route A</th>
-                    <th>Airline B</th>
-                    <th>Route B</th>
-                    <th>Intercepts</th>
-                </tr>
-            </thead>
-            <tbody id="results-body">
-                <tr><td colspan="6">Enter routes and click 'Plot & Find Intercepts' to run analysis.</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- SheetJS for CSV parsing -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="main.js"></script>
-</body>
-</html>
+<header><h1>Airline Route Intercept Analyzer</h1><p id="status-message" role="status">Loading airports.csv…</p></header>
+<main>
+  <section class="toolbar">
+    <button id="add-column" type="button">Add airline column</button>
+    <label>Compare mode<select id="compare-mode"><option value="selected">Selected pairs</option><option value="pairwise">Pairwise A-B, C-D…</option><option value="pairwise-wrap">Pairwise with wrap</option><option value="all">All pairs</option></select></label>
+    <label id="pair-pattern-wrap">Selected pairs <input id="pair-patterns" value="A-B" placeholder="A-B, C-D, D-A"></label>
+    <label>Minimum intercepts <input id="min-intercepts" type="number" min="1" max="10" value="1"></label>
+    <label>Maximum intercepts <input id="max-intercepts" type="number" min="1" max="10" value="10"></label>
+    <button id="run-analysis" type="button">Run analysis</button>
+  </section>
+  <p class="hint">Use a first non-empty line such as <code># Emirates</code> to name a column. Then add routes one per line, for example <code>HKG-JFK</code>.</p>
+  <section id="route-columns" class="route-columns"></section>
+  <section id="exports" class="exports hidden"><button data-export="txt" type="button">Download result.txt</button><button data-export="csv" type="button">Download CSV</button><button data-export="xlsx" type="button">Download XLSX</button></section>
+  <div id="map"></div>
+  <section class="results"><h2>Matching airline-pair intercepts</h2><div class="table-wrap"><table><thead><tr><th>Airline A</th><th>Airline B</th><th>Routes</th><th>Pair count</th><th>A distance</th><th>B distance</th><th>Latitude</th><th>Longitude</th></tr></thead><tbody id="results-body"><tr><td colspan="8">Add routes and run the analysis.</td></tr></tbody></table></div></section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="main.js"></script>
+</body></html>
