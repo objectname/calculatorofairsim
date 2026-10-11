@@ -7,36 +7,78 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .control-panel { padding: 15px; background: #2c3e50; color: white; display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-start; }
+        .control-panel { padding: 12px; background: #2c3e50; color: white; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
         .control-panel label { display: flex; flex-direction: column; font-size: 14px; color: #ecf0f1; }
-        .control-panel textarea { margin-top: 5px; width: 320px; height: 160px; padding: 8px; border-radius: 4px; border: 1px solid #bdc3c7; font-family: monospace; }
-        button { padding: 8px 15px; background: #e74c3c; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; height: 40px; align-self: center; }
+        .control-panel textarea { margin-top: 5px; width: 280px; height: 120px; padding: 8px; border-radius: 4px; border: 1px solid #bdc3c7; font-family: monospace; }
+        .columns { display:flex; gap:12px; align-items:flex-start; }
+        .route-column { background: transparent; padding: 6px; border-radius:6px; }
+        .route-column .column-name { width: 280px; margin-top:6px; padding:6px; border-radius:4px; border:1px solid #bdc3c7; }
+        button { padding: 8px 12px; background: #e74c3c; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; height: 36px; }
         button:hover { background: #c0392b; }
-        #map { height: 65vh; width: 100%; }
-        #results-container { height: 20vh; overflow-y: auto; background: #ecf0f1; padding: 10px; font-family: monospace; font-size: 13px; }
+        #map { height: 62vh; width: 100%; }
+        #results-container { height: 22vh; overflow-y: auto; background: #ecf0f1; padding: 10px; font-family: monospace; font-size: 13px; }
         table { width: 100%; border-collapse: collapse; background: white; }
         th, td { border: 1px solid #bdc3c7; padding: 6px; text-align: left; color: #333; }
         th { background: #34495e; color: white; }
         #status-message { margin-left: 10px; font-size: 13px; color: #f1c40f; align-self: center; }
+        .controls-right { display:flex; flex-direction:column; gap:8px; }
+        .small { font-size:13px; }
+        .inline { display:flex; gap:8px; align-items:center; }
+        .note { color:#bdc3c7; font-size:12px; }
     </style>
 </head>
 <body>
     <div class="control-panel">
-        <label>
-            Text Routes A (one per line, use CODE1-CODE2):
-            <textarea id="text1" placeholder="HKG-JFK\nVHHH-KJFK\nLHR-DXB"></textarea>
-        </label>
-
-        <label>
-            Text Routes B (one per line, use CODE1-CODE2):
-            <textarea id="text2" placeholder="SIN-NRT\nDXB-OMDB\nJFK-KJFK"></textarea>
-        </label>
-
-        <div style="display:flex; flex-direction:column; justify-content:center;">
-            <button onclick="processTextAreas()">Plot & Find Intercepts</button>
+        <div class="columns" id="columns-container">
+            <!-- Airline columns are injected here -->
         </div>
 
-        <span id="status-message">Connecting to OurAirports database...</span>
+        <div class="controls-right">
+            <div class="inline">
+                <button id="add-column">Add column</button>
+                <button id="remove-column">Remove column</button>
+                <span id="status-message">Connecting to OurAirports database...</span>
+            </div>
+
+            <div class="inline">
+                <label class="small">Compare mode
+                    <select id="compare-mode" class="small">
+                        <option value="selected">Selected pair</option>
+                        <option value="pairwise">Pairwise (A-B, C-D...)</option>
+                        <option value="allpairs">All pairs</option>
+                    </select>
+                </label>
+
+                <label class="small">Wrap last -> first
+                    <input type="checkbox" id="wrap-pair" title="When pairwise mode is selected, compare last with first" />
+                </label>
+            </div>
+
+            <div class="inline">
+                <label class="small">Compare A
+                    <select id="compare-a" class="small"></select>
+                </label>
+                <label class="small">Compare B
+                    <select id="compare-b" class="small"></select>
+                </label>
+            </div>
+
+            <div class="inline">
+                <label class="small">Min intercepts
+                    <input type="number" id="min-intercepts" value="1" min="1" max="100" class="small" />
+                </label>
+                <label class="small">Max intercepts
+                    <input type="number" id="max-intercepts" value="10" min="1" max="100" class="small" />
+                </label>
+            </div>
+
+            <div class="inline">
+                <button id="plot-button">Plot & Find Intercepts</button>
+                <button id="download-button">Download result.txt</button>
+            </div>
+
+            <div class="note">Tip: To name a column inside its text area, start the first non-empty line with <code># Airline Name</code> and it will be used as that column's name.</div>
+        </div>
     </div>
 
     <div id="map"></div>
@@ -45,14 +87,16 @@
         <table id="results-table">
             <thead>
                 <tr>
-                    <th>Route A (Text 1)</th>
-                    <th>Route B (Text 2)</th>
-                    <th>Intercept Lat</th>
-                    <th>Intercept Lon</th>
+                    <th>Pair</th>
+                    <th>Airline A</th>
+                    <th>Route A</th>
+                    <th>Airline B</th>
+                    <th>Route B</th>
+                    <th>Intercepts</th>
                 </tr>
             </thead>
             <tbody id="results-body">
-                <tr><td colspan="4">Enter routes and click 'Plot & Find Intercepts' to run analysis.</td></tr>
+                <tr><td colspan="6">Enter routes and click 'Plot & Find Intercepts' to run analysis.</td></tr>
             </tbody>
         </table>
     </div>
