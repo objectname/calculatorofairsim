@@ -1,6 +1,10 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <link
+  href="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Widgets/widgets.css"
+  rel="stylesheet"
+>
   <meta charset="utf-8">
   <meta
     name="viewport"
@@ -399,7 +403,17 @@
       </button>
     </section>
 
-    <div id="map" aria-label="Route and intercept map"></div>
+    <div class="map-tabs">
+  <button id="show-globe" type="button" class="active">
+    3D Globe
+  </button>
+  <button id="show-map" type="button">
+    2D Map
+  </button>
+</div>
+
+<div id="cesiumContainer" class="map-view"></div>
+<div id="map" class="map-view hidden"></div>
 
     <section class="results">
       <h2>Route-pair intercept results</h2>
