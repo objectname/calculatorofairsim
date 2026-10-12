@@ -374,6 +374,7 @@ function drawRoute(route, color, airlineName) {
     color,
     weight: 2.5,
     opacity: 0.86
+    noClip: true
   })
     .bindPopup(
       `<strong>${escapeHtml(airlineName)}</strong><br>` +
