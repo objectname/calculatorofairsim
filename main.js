@@ -372,7 +372,7 @@ function drawRoute(route, color, airlineName) {
   L.polyline(coordinates, {
     color,
     weight: 2.5,
-    opacity: 0.86
+    opacity: 0.86,
     noClip: true
   })
     .bindPopup(
