@@ -102,7 +102,6 @@ function findHeaderIndex(headers, acceptedNames) {
 async function loadAirportsCSV() {
   try {
     const response = await fetch("./airports.csv", {
-      cache: "no-store"
     });
 
     if (!response.ok) {
