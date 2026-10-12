@@ -483,9 +483,29 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+
 <script src="./calculation.js"></script>
-<script src="./plotmap.js"></script>
-<script src="./main.js"></script>
+
+<script>
+  setTimeout(() => {
+    const plotMapScript = document.createElement("script");
+    plotMapScript.src = "./plotmap.js";
+
+    plotMapScript.onload = () => {
+      const mainScript = document.createElement("script");
+      mainScript.src = "./main.js";
+      document.body.appendChild(mainScript);
+    };
+
+    plotMapScript.onerror = () => {
+      console.error("Could not load plotmap.js");
+    };
+
+    document.body.appendChild(plotMapScript);
+  }, 200);
+</script>
+  
   
 </body>
 </html>
