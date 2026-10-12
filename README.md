@@ -1,6 +1,4 @@
-Copy the Markdown below into `README.md`:
 
-```markdown
 # AIRLINE ROUTE INTERCEPT ANALYZER
 
 An AI-generated, lightweight, browser-based tool for plotting airline routes and comparing route pairs to find shared endpoints and great-circle intersections on an interactive map. It runs as a static website and does not require a backend.
@@ -66,6 +64,6 @@ The minimum and maximum settings filter each individual route-pair comparison by
 ### Include shared airport endpoints
 
 When enabled, common route endpoints can count as intersections. Two routes that use the same airport may produce a `shared-airport` result. A route compared with its reversed version may share both endpoints and produce two results.
-```
+
 
 Sources
