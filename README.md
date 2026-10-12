@@ -1,108 +1,113 @@
-# Calculator of AirSim
+AIRLINE ROUTE INTERCEPT ANALYZER
+(Also referred to as Calculator of AirSim)
 
-A slop coded lightweight browser-based tool for comparing two route datasets and finding great-circle intercept points between flight segments.
+A lightweight, browser-based tool for plotting airline routes and comparing route pairs to find shared endpoints and great-circle intersections on an interactive map. It runs as a static website and does not require a backend.
 
-This project is designed to run as a static GitHub Pages site, so it can be hosted directly from the repository without a backend.
+WHAT IT DOES
 
-## What it does
+- Plots airport-to-airport routes on an interactive map.
+- Compares selected airline columns and their route pairs.
+- Finds great-circle segment intersections and, when enabled, shared airport endpoints.
+- Displays intersection type, coordinates, route-pair count, and distance along each route.
+- Exports results as TXT, CSV, or XLSX files.
 
-- Upload two route files in CSV, XLSX, or TXT format
-- Plot route segments on an interactive map
-- Compare route A and route B pairs
-- Detect valid great-circle intercepts between segments
-- Display matching intercept coordinates in a results table
+PROJECT FILES
 
-## Example use case
+index.html
+Contains the application page and user interface.
 
-You can compare airline or waypoint route files and quickly identify where two flight paths intersect.
+site.css
+Contains the application styling.
 
-## Supported file formats
+main.js
+Loads airport data, parses routes, manages airline columns, runs comparisons, displays results, and handles exports.
 
-- .csv
-- .xlsx
-- .xls
-- .txt
+calculation.js
+Provides distance calculations, great-circle route plotting points, and route intersection calculations. It must load before main.js.
 
-## Expected input format
+airports.csv
+Contains airport identifiers and coordinates used to locate route endpoints. Its filename must be exactly airports.csv.
 
-The app uses airport or route codes mapped to known coordinates. Supported examples include:
+Keep these files in the same project folder:
 
-- HKG-JFK
-- VHHH-KJFK
-- LHR-DXB
-- SIN-NRT
+index.html
+site.css
+main.js
+calculation.js
+airports.csv
 
-The parser accepts rows such as:
+REQUIREMENTS
 
-```text
-HKG JFK
-VHHH KJFK
-LHR DXB
-```
+The app loads Leaflet, the XLSX export library, and map tiles from online services. An internet connection is required for those services unless you host the libraries and map tiles yourself.
 
-or
+The airport database is fetched from ./airports.csv. The CSV must have a header row with airport code fields and latitude and longitude fields. Common recognized fields include ident, iata, icao, gps_code, latitude, and longitude.
 
-```text
-HKG-JFK
-VHHH-KJFK
-LHR-DXB
-```
+At the end of index.html, load scripts in this order:
 
-## Project files
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="./calculation.js"></script>
+<script src="./main.js"></script>
 
-- `index.html` — app structure and map UI
-- `main.js` — route parsing, geometry, and intercept logic
-- `README.md` — project overview and usage instructions
+ENTERING ROUTES
 
-## Run locally
+Each airline column accepts one route per line. Optionally, name the airline by putting a line beginning with # at the top of the column.
 
-Because this is a static front-end app, you can run it in either of these ways:
+Example:
 
-1. Open `index.html` directly in a browser
-2. Or serve the repo locally with a simple web server:
+# JAL
+HND LAX
+HND JFK
+HND LHR
 
-```bash
+Route endpoints can be separated by spaces, hyphens, commas, or slashes. Both of these are accepted:
+
+HND LAX
+HND-LAX
+
+Airport codes are case-insensitive and must exist in airports.csv.
+
+COMPARISON OPTIONS
+
+Selected column pairs
+Enter pairs such as A-B or A-B, C-D in the selected column pairs field.
+
+Pairwise A-B, C-D
+Compares consecutive columns in pairs.
+
+Pairwise with wrap
+Compares consecutive pairs and also compares the last column with the first.
+
+All column pairs
+Compares every distinct pair of airline columns.
+
+The minimum and maximum settings filter each individual route-pair comparison by its number of detected intersections. The current interface supports values from zero to two.
+
+Include shared airport endpoints
+When enabled, common route endpoints can count as intersections. Two routes that use the same airport may produce a shared-airport result. A route compared with its reversed version may share both endpoints and produce two results.
+
+RUNNING LOCALLY
+
+Use a local web server rather than opening index.html directly. Browsers may block the app from fetching airports.csv when the page is opened as a local file.
+
+If Python is installed, open a terminal in the project folder and run:
+
 python -m http.server 8000
-```
 
 Then open:
 
-```text
 http://localhost:8000
-```
 
-## Deploy as a GitHub Pages site
+Enter routes and click Run analysis.
 
-To publish this repo as a GitHub Pages website:
+GITHUB PAGES
 
-1. Go to the repository on GitHub
-2. Open Settings
-3. Select Pages
-4. Under "Build and deployment", choose:
-   - Source: Deploy from a branch
-   - Branch: `main`
-   - Folder: `/ (root)`
-5. Save
+The app can be hosted as a static GitHub Pages site:
 
-Your site will be available at:
+1. Open the repository on GitHub.
+2. Go to Settings, then Pages.
+3. Under Build and deployment, select Deploy from a branch.
+4. Choose the main branch and the root folder.
+5. Save.
 
-```text
-https://<your-github-username>.github.io/calculatorofairsim
-```
-
-Note: If the repository remains private, GitHub Pages availability may depend on your GitHub plan and account settings.
-
-## Features summary
-
-- Interactive map with satellite and OpenStreetMap layers
-- Route plotting in cyan and magenta
-- Intercept marker display in yellow
-- Results table for route pairs and coordinate output
-
-## License
-
-This project currently has no explicit license file. If you plan to share or distribute it publicly, consider adding an open-source license such as MIT.
-
-## Notes
-
-This project is a client-side app and does not require a server-side backend. It is well-suited for GitHub Pages and similar static hosting providers.
+The published address will follow this patter
